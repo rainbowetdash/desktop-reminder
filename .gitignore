@@ -1,0 +1,11 @@
+# 安装包（体积超过 GitHub 100MB 限制，建议用 Releases 发布）
+桌面提醒安装包/
+*.dmg
+*.exe
+
+# 构建产物
+*.app/
+node_modules/
+dist/
+*.log
+.DS_Store

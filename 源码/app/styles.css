@@ -297,6 +297,9 @@ input[type="range"]::-webkit-slider-thumb {
 .toggle input:checked + .toggle-ui::after { transform: translateX(13px); }
 .toggle input:focus-visible + .toggle-ui { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.btn-text { border: 0; background: none; color: var(--ink-2); font-size: 13px; font-weight: 500; padding: 6px 8px; border-radius: 8px; }
+.btn-text:hover { color: var(--accent); }
+.btn-text:disabled { opacity: .5; }
 .status { font-size: 13px; color: var(--ink-3); }
 .status.ok { color: var(--ok); }
 .status.err { color: var(--danger); }

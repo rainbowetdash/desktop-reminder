@@ -65,7 +65,7 @@
   }
 
   function paintBackground(ctx, W, H, bg, img) {
-    if (bg && bg.type === 'image' && img && img.naturalWidth) {
+    if (bg && (bg.type === 'image' || bg.type === 'original') && img && img.naturalWidth) {
       const s = Math.max(W / img.naturalWidth, H / img.naturalHeight);
       const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
       ctx.imageSmoothingQuality = 'high';

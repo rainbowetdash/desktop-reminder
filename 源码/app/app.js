@@ -62,7 +62,9 @@
   }
 
   async function renderTo(canvas, c, W, H) {
-    const image = c.background && c.background.type === 'image' ? await loadImage(c.background.path) : null;
+    const bt = c.background && c.background.type;
+    const image = bt === 'image' ? await loadImage(c.background.path)
+      : bt === 'original' ? await loadImage(c.originalWallpaper) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
     R.renderWallpaper(canvas, c, W, H, { image, ...fo });
   }
@@ -198,6 +200,28 @@
   const swatches = $('swatches');
   function renderSwatches() {
     swatches.innerHTML = '';
+    {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'swatch' + (cfg.originalWallpaper ? '' : ' swatch-add');
+      b.title = cfg.originalWallpaper ? '我原来的壁纸' : '还没有找到原壁纸，点这里手动选择';
+      b.setAttribute('aria-label', '我原来的壁纸');
+      b.setAttribute('role', 'radio');
+      if (cfg.originalWallpaper) b.style.backgroundImage = `url("${api.fileUrl(cfg.originalWallpaper)}")`;
+      else b.textContent = '原壁纸';
+      b.setAttribute('aria-checked', String(cfg.background.type === 'original'));
+      b.addEventListener('click', async () => {
+        if (!cfg.originalWallpaper) {
+          const r = await api.pickOriginal();
+          if (!r.ok) { if (r.error) setStatus(r.error, 'err'); return; }
+          useOriginal(r.path);
+        }
+        cfg.background = { type: 'original' };
+        renderSwatches();
+        schedule();
+      });
+      swatches.appendChild(b);
+    }
     for (const p of window.BG_PRESETS) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -238,6 +262,21 @@
     swatches.appendChild(add);
   }
   if (cfg.background.type === 'image') cfg.lastImage = cfg.background.path;
+
+  const restoreBtn = $('restore');
+  function useOriginal(p) {
+    cfg.originalWallpaper = p;
+    imageCache.delete(p);
+    restoreBtn.hidden = !p;
+  }
+  // 读取系统当前壁纸；如果是你自己的壁纸就备份成「原壁纸」
+  async function syncOriginal() {
+    const r = await api.captureOriginal();
+    if (r.ok && r.path !== cfg.originalWallpaper) useOriginal(r.path);
+    else restoreBtn.hidden = !cfg.originalWallpaper;
+    return r;
+  }
+  restoreBtn.hidden = !cfg.originalWallpaper;
   renderSwatches();
 
   // ---------- 应用 ----------
@@ -251,6 +290,10 @@
     if (!silent) setStatus('正在生成壁纸…');
     try {
       screenSize = await api.screenSize();
+      if (cfg.background.type === 'original') {
+        const r = await syncOriginal();
+        if (!r.ok) { setStatus('没能读取原壁纸：' + r.error, 'err'); return; }
+      }
       const c = document.createElement('canvas');
       await renderTo(c, cfg, screenSize.width, screenSize.height);
       const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
@@ -272,6 +315,16 @@
     await api.saveConfig(stripCfg(cfg));
     applyWallpaper(false);
   });
+  restoreBtn.addEventListener('click', async () => {
+    restoreBtn.disabled = true;
+    setStatus('正在恢复原壁纸…');
+    showRestored(await api.restoreWallpaper());
+    restoreBtn.disabled = false;
+  });
+  function showRestored(r) {
+    setStatus(r.ok ? '已恢复原壁纸' : '没能恢复：' + r.error, r.ok ? 'ok' : 'err');
+  }
+  api.onRestored(showRestored);
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
@@ -280,7 +333,8 @@
     if (e.key === 'Escape' && !$('fontDrawer').hidden) closeDrawer();
   });
   api.onAutoApply(async () => {
-    cfg = { ...cfg, ...(await api.getConfig()) };
+    const fresh = await api.getConfig();
+    cfg = { ...cfg, ...fresh };
     applyWallpaper(true);
     refreshPreview();
   });
@@ -482,5 +536,7 @@
     if (bar) bar.style.width = (done / total) * 100 + '%';
   });
 
+  await syncOriginal();
+  renderSwatches();
   refreshPreview();
 })();

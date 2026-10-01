@@ -1,0 +1,27 @@
+name: build-windows
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要把 Windows 安装包上传到哪个 Release（例如 v2.1.0）
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build installer
+        working-directory: 源码/app
+        run: |
+          npm install
+          npx electron-builder --win --x64 --publish never
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" 源码/app/dist/*-windows-setup.exe --clobber --repo "${{ github.repository }}"

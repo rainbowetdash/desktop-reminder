@@ -28,8 +28,9 @@ function main() {
     fonts: path.join(USER, 'fonts'),
     bgs: path.join(USER, 'backgrounds'),
     walls: path.join(USER, 'wallpapers'),
+    orig: path.join(USER, 'original'),
   };
-  for (const d of [P.fonts, P.bgs, P.walls]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [P.fonts, P.bgs, P.walls, P.orig]) fs.mkdirSync(d, { recursive: true });
 
   const DEFAULTS = {
     title: '我的提醒',
@@ -43,6 +44,8 @@ function main() {
     background: { type: 'preset', id: 'dusk' },
     launchAtLogin: false,
     lastAppliedDate: '',
+    originalWallpaper: '', // 备份下来的原壁纸（本机副本）
+    originalSource: '',    // 原壁纸在系统里的位置
   };
 
   let win = null;
@@ -158,6 +161,7 @@ function main() {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开桌面提醒', click: showWin },
       { label: '立即更新壁纸', click: () => win && win.webContents.send('auto-apply', { force: true }) },
+      { label: '恢复原壁纸', click: () => { restoreOriginal().then((r) => { if (win) win.webContents.send('restored', r); }); } },
       { type: 'separator' },
       { label: '退出', click: () => { quitting = true; app.quit(); } },
     ]));
@@ -232,6 +236,87 @@ function main() {
     } else {
       throw new Error('这个系统暂不支持自动换壁纸');
     }
+  }
+
+
+  // ---------- 原壁纸 ----------
+  async function currentWallpaperPath() {
+    if (isMac) {
+      const script = `function run(){
+        ObjC.import('AppKit');
+        var u = $.NSWorkspace.sharedWorkspace.desktopImageURLForScreen($.NSScreen.mainScreen);
+        return u ? ObjC.unwrap(u.path) : '';
+      }`;
+      return (await run('osascript', ['-l', 'JavaScript', '-e', script])).trim();
+    }
+    if (isWin) {
+      const ps = [
+        "$ErrorActionPreference='SilentlyContinue'",
+        '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
+        "$p=(Get-ItemProperty 'HKCU:\\Control Panel\\Desktop').WallPaper",
+        "if (-not $p -or -not (Test-Path -LiteralPath $p)) { $t=Join-Path $env:APPDATA 'Microsoft\\Windows\\Themes\\TranscodedWallpaper'; if (Test-Path -LiteralPath $t) { $p=$t } }",
+        'Write-Output $p',
+      ].join('\n');
+      const enc = Buffer.from(ps, 'utf16le').toString('base64');
+      return (await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc])).trim();
+    }
+    return '';
+  }
+
+  function isOurs(file) {
+    const norm = (x) => (isWin ? path.resolve(x).toLowerCase() : path.resolve(x));
+    return norm(file).startsWith(norm(P.walls) + path.sep);
+  }
+
+  function clearDir(dir) {
+    for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f), { recursive: true, force: true });
+  }
+
+  async function backupFile(src) {
+    // 返回备份到本机的图片路径
+    let ext = path.extname(src).toLowerCase();
+    const plain = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'];
+    const stamp = Date.now();
+    clearDir(P.orig);
+    if (!ext) ext = '.jpg'; // Windows 的 TranscodedWallpaper 没有后缀，内容是 JPEG
+    if (plain.includes(ext)) {
+      const dest = path.join(P.orig, `original-${stamp}${ext}`);
+      fs.copyFileSync(src, dest);
+      return dest;
+    }
+    if (isMac) {
+      // heic 等格式：用系统自带的 sips 转成 png
+      const dest = path.join(P.orig, `original-${stamp}.png`);
+      await run('/usr/bin/sips', ['-s', 'format', 'png', src, '--out', dest]);
+      return dest;
+    }
+    throw new Error('暂不支持这种格式的壁纸');
+  }
+
+  // 读取系统当前壁纸；如果它不是本 App 生成的，就当作「原壁纸」备份起来
+  async function captureOriginal() {
+    const c = loadConfig();
+    let note = '';
+    try {
+      const cur = await currentWallpaperPath();
+      if (cur && !isOurs(cur) && cur !== c.originalSource) {
+        if (fs.existsSync(cur) && fs.statSync(cur).isFile()) {
+          c.originalWallpaper = await backupFile(cur);
+          c.originalSource = cur;
+          saveConfig(c);
+        } else {
+          note = '当前壁纸是动态或视频壁纸，没法直接读取';
+        }
+      }
+    } catch (e) {
+      note = e.message || String(e);
+    }
+    const ok = !!(c.originalWallpaper && fs.existsSync(c.originalWallpaper));
+    return {
+      ok,
+      path: ok ? c.originalWallpaper : '',
+      error: ok ? '' : (note || '没有找到你原来的壁纸（当前壁纸已经是本 App 生成的）'),
+    };
   }
 
   function checkNewDay() {
@@ -324,7 +409,7 @@ function main() {
   ipcMain.handle('config:get', () => ({ ...loadConfig(), platform: process.platform }));
   ipcMain.handle('config:save', (_e, c) => {
     const cur = loadConfig();
-    const next = { ...cur, ...c };
+    const next = { ...cur, ...c, originalWallpaper: cur.originalWallpaper, originalSource: cur.originalSource };
     delete next.platform;
     saveConfig(next);
     return true;
@@ -350,6 +435,47 @@ function main() {
     fs.copyFileSync(src, dest);
     return dest;
   });
+
+
+  ipcMain.handle('original:capture', () => captureOriginal());
+
+  ipcMain.handle('original:pick', async () => {
+    // 当前壁纸已被本 App 覆盖、找不到原图时，手动指定一张当作原壁纸
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择你原来的壁纸',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, path: '', error: '' };
+    try {
+      const c = loadConfig();
+      c.originalWallpaper = await backupFile(r.filePaths[0]);
+      c.originalSource = '';
+      saveConfig(c);
+      return { ok: true, path: c.originalWallpaper, error: '' };
+    } catch (e) {
+      return { ok: false, path: '', error: e.message || String(e) };
+    }
+  });
+
+  async function restoreOriginal() {
+    try {
+      const c = loadConfig();
+      const cands = [];
+      // 系统里的原文件优先（能保留动态壁纸）；Windows 的缓存文件会被系统改写，不用它
+      if (c.originalSource && !/TranscodedWallpaper$/i.test(c.originalSource)) cands.push(c.originalSource);
+      if (c.originalWallpaper) cands.push(c.originalWallpaper);
+      const f = cands.find((x) => fs.existsSync(x));
+      if (!f) return { ok: false, error: '没有备份过原壁纸' };
+      await setWallpaper(f);
+      c.lastAppliedDate = ''; // 恢复后不再自动覆盖，直到你再次点「应用到桌面」
+      saveConfig(c);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
+  ipcMain.handle('wallpaper:restore', () => restoreOriginal());
 
   ipcMain.handle('wallpaper:apply', async (_e, bytes) => {
     try {

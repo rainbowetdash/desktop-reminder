@@ -1,9 +1,31 @@
 {
   "name": "desktop-note",
   "productName": "桌面提醒",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "在窗口里写提醒，一键写到桌面壁纸上",
   "main": "main.js",
   "author": "桌面提醒",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "41.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "local.desktopnote.app",
+    "productName": "桌面提醒",
+    "files": ["**/*", "!node_modules/.cache"],
+    "directories": { "output": "dist" },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "DesktopReminder-${version}-windows-setup.${ext}"
+    }
+  }
 }

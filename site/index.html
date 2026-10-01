@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>桌面提醒 · 下载</title>
+<style>
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e4e4df;--accent:#2f6fed}
+@media(prefers-color-scheme:dark){:root{--bg:#161615;--fg:#f0f0ec;--muted:#9a9a93;--card:#202020;--line:#333330;--accent:#6b9bff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+main{max-width:640px;margin:0 auto;padding:56px 16px}
+h1{font-size:32px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 32px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.card b{display:block}.card span{color:var(--muted);font-size:14px}
+a.btn{background:var(--accent);color:#fff;text-decoration:none;padding:8px 18px;border-radius:8px;font-weight:600}
+h2{font-size:18px;margin:36px 0 8px}
+ol{padding-left:22px;color:var(--muted)}
+footer{margin-top:40px;color:var(--muted);font-size:14px}
+footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+<h1>桌面提醒</h1>
+<p class="sub">在窗口里写提醒，一键写到桌面壁纸上 · 版本 2.0.0</p>
+
+<div class="card"><div><b>macOS · Apple 芯片</b><span>M1 / M2 / M3 / M4，约 110 MB</span></div>
+<a class="btn" href="https://github.com/rainbowetdash/desktop-reminder/releases/download/v2.0.0/DesktopReminder-2.0.0-mac-arm64.dmg">下载</a></div>
+<div class="card"><div><b>macOS · Intel 芯片</b><span>约 119 MB</span></div>
+<a class="btn" href="https://github.com/rainbowetdash/desktop-reminder/releases/download/v2.0.0/DesktopReminder-2.0.0-mac-x64.dmg">下载</a></div>
+<div class="card"><div><b>Windows</b><span>安装包 .exe，约 95 MB</span></div>
+<a class="btn" href="https://github.com/rainbowetdash/desktop-reminder/releases/download/v2.0.0/DesktopReminder-2.0.0-windows-setup.exe">下载</a></div>
+
+<h2>选哪个 Mac 版本？</h2>
+<p class="sub" style="margin:0">左上角苹果菜单 →「关于本机」：芯片写 Apple M 系列选 Apple 芯片版；处理器写 Intel 选 Intel 版。</p>
+
+<h2>macOS 第一次打开</h2>
+<ol>
+<li>把「桌面提醒」拖进「应用程序」文件夹，双击打开。</li>
+<li>若提示「无法打开」，点「完成」或「取消」。</li>
+<li>打开「系统设置」→「隐私与安全性」，找到「已阻止“桌面提醒”」，点「仍要打开」并输入开机密码。</li>
+<li>再打开一次，点「打开」。之后正常使用。</li>
+</ol>
+
+<h2>Windows 第一次打开</h2>
+<ol>
+<li>双击安装包。</li>
+<li>若出现「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」。</li>
+<li>按提示「下一步」即可，不需要管理员权限。</li>
+</ol>
+<p class="sub">应用没有购买代码签名证书，所以系统会提示一次，属于正常现象。</p>
+
+<footer><a href="https://github.com/rainbowetdash/desktop-reminder">源码 · GitHub</a></footer>
+</main>
+</body>
+</html>

@@ -64,7 +64,8 @@
   async function renderTo(canvas, c, W, H) {
     const bt = c.background && c.background.type;
     const image = bt === 'image' ? await loadImage(c.background.path)
-      : bt === 'original' ? await loadImage(c.originalWallpaper) : null;
+      : bt === 'original' ? await loadImage(c.originalWallpaper)
+      : bt === 'folder' ? await loadImage(c.lastPick) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
     R.renderWallpaper(canvas, c, W, H, { image, ...fo });
   }
@@ -200,6 +201,7 @@
   const swatches = $('swatches');
   function renderSwatches() {
     swatches.innerHTML = '';
+    if (typeof syncRotateBar === 'function') syncRotateBar();
     {
       const b = document.createElement('button');
       b.type = 'button';
@@ -220,6 +222,20 @@
         renderSwatches();
         schedule();
       });
+      swatches.appendChild(b);
+    }
+    {
+      const on = cfg.background.type === 'folder';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'swatch' + (on && cfg.lastPick ? '' : ' swatch-add');
+      b.title = '从壁纸文件夹里随机轮换';
+      b.setAttribute('aria-label', '壁纸文件夹轮换');
+      b.setAttribute('role', 'radio');
+      if (on && cfg.lastPick) b.style.backgroundImage = `url("${api.fileUrl(cfg.lastPick)}")`;
+      else b.textContent = '文件夹轮换';
+      b.setAttribute('aria-checked', String(on));
+      b.addEventListener('click', () => chooseFolderMode());
       swatches.appendChild(b);
     }
     for (const p of window.BG_PRESETS) {
@@ -263,6 +279,44 @@
   }
   if (cfg.background.type === 'image') cfg.lastImage = cfg.background.path;
 
+  // ---------- 文件夹轮换 ----------
+  const rotateBar = $('rotateBar');
+  function syncRotateBar() {
+    const on = cfg.background.type === 'folder';
+    rotateBar.hidden = !on;
+    if (!on) return;
+    const f = cfg.background.folder || cfg.rotateFolder || '';
+    $('rotateFolder').textContent = f ? '\u200E' + f : '';
+    $('rotateFolder').title = f;
+    $('rotateMinutes').value = String(cfg.rotateMinutes ?? 30);
+  }
+  async function useFolder(folder) {
+    const r = await api.nextPick(folder);
+    if (!r.ok) { setStatus(r.error, 'err'); return false; }
+    cfg.rotateFolder = folder;
+    cfg.lastPick = r.path;
+    cfg.background = { type: 'folder', folder };
+    imageCache.delete(r.path);
+    return true;
+  }
+  async function chooseFolderMode(forceChoose) {
+    let folder = forceChoose ? '' : (cfg.background.folder || (await api.defaultFolder()));
+    if (!folder) folder = await api.chooseFolder();
+    if (!folder) return;
+    if (!(await useFolder(folder))) return;
+    syncRotateBar();
+    renderSwatches();
+    schedule();
+  }
+  $('rotateChange').addEventListener('click', () => chooseFolderMode(true));
+  $('rotateMinutes').addEventListener('change', (e) => { cfg.rotateMinutes = Number(e.target.value); schedule(); });
+  $('rotateNow').addEventListener('click', async () => {
+    if (!(await useFolder(cfg.background.folder || cfg.rotateFolder))) return;
+    renderSwatches();
+    await refreshPreview();
+    applyWallpaper(false);
+  });
+
   const restoreBtn = $('restore');
   function useOriginal(p) {
     cfg.originalWallpaper = p;
@@ -283,6 +337,7 @@
   const applyBtn = $('apply'), status = $('status');
   function setStatus(text, kind) {
     status.textContent = text;
+    status.title = text;
     status.className = 'status' + (kind ? ' ' + kind : '');
   }
   async function applyWallpaper(silent) {
@@ -290,6 +345,9 @@
     if (!silent) setStatus('正在生成壁纸…');
     try {
       screenSize = await api.screenSize();
+      if (cfg.background.type === 'folder' && !cfg.lastPick) {
+        if (!(await useFolder(cfg.background.folder || cfg.rotateFolder))) return;
+      }
       if (cfg.background.type === 'original') {
         const r = await syncOriginal();
         if (!r.ok) { setStatus('没能读取原壁纸：' + r.error, 'err'); return; }

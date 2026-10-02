@@ -80,6 +80,28 @@
         <div class="swatches" id="swatches" role="radiogroup" aria-label="背景"></div>
       </div>
 
+      <div class="rotate-bar" id="rotateBar" hidden>
+        <span class="row-label">轮换</span>
+        <span class="rotate-folder" id="rotateFolder"></span>
+        <button id="rotateChange" class="btn-text" type="button">更换文件夹</button>
+        <label class="rotate-every">每
+          <select id="rotateMinutes" aria-label="多久换一张">
+            <option value="0">不自动换</option>
+            <option value="1">1 分钟</option>
+            <option value="5">5 分钟</option>
+            <option value="10">10 分钟</option>
+            <option value="15">15 分钟</option>
+            <option value="30">30 分钟</option>
+            <option value="60">1 小时</option>
+            <option value="120">2 小时</option>
+            <option value="360">6 小时</option>
+            <option value="720">12 小时</option>
+            <option value="1440">每天</option>
+          </select> 换一张
+        </label>
+        <button id="rotateNow" class="btn-text" type="button">立即换一张</button>
+      </div>
+
       <footer class="actions">
         <label class="toggle"><input type="checkbox" id="showDate"><span class="toggle-ui" aria-hidden="true"></span>显示日期</label>
         <label class="toggle"><input type="checkbox" id="login"><span class="toggle-ui" aria-hidden="true"></span>开机自动启动</label>

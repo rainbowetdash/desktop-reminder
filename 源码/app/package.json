@@ -1,7 +1,7 @@
 {
   "name": "desktop-note",
   "productName": "桌面提醒",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "在窗口里写提醒，一键写到桌面壁纸上",
   "main": "main.js",
   "author": "桌面提醒",

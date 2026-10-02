@@ -29,8 +29,9 @@ function main() {
     bgs: path.join(USER, 'backgrounds'),
     walls: path.join(USER, 'wallpapers'),
     orig: path.join(USER, 'original'),
+    cache: path.join(USER, 'pick-cache'),
   };
-  for (const d of [P.fonts, P.bgs, P.walls, P.orig]) fs.mkdirSync(d, { recursive: true });
+  for (const d of [P.fonts, P.bgs, P.walls, P.orig, P.cache]) fs.mkdirSync(d, { recursive: true });
 
   const DEFAULTS = {
     title: '我的提醒',
@@ -46,6 +47,11 @@ function main() {
     lastAppliedDate: '',
     originalWallpaper: '', // 备份下来的原壁纸（本机副本）
     originalSource: '',    // 原壁纸在系统里的位置
+    originalFolder: '',    // 推测出的「你的壁纸文件夹」
+    rotateFolder: '',      // 轮换用的壁纸文件夹
+    rotateMinutes: 30,     // 多少分钟换一张，0 = 不自动换
+    lastPick: '',          // 当前轮换到的那张图
+    lastRotateAt: 0,
   };
 
   let win = null;
@@ -161,6 +167,7 @@ function main() {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开桌面提醒', click: showWin },
       { label: '立即更新壁纸', click: () => win && win.webContents.send('auto-apply', { force: true }) },
+      { label: '换一张壁纸', click: () => rotateTick(true) },
       { label: '恢复原壁纸', click: () => { restoreOriginal().then((r) => { if (win) win.webContents.send('restored', r); }); } },
       { type: 'separator' },
       { label: '退出', click: () => { quitting = true; app.quit(); } },
@@ -265,7 +272,7 @@ function main() {
 
   function isOurs(file) {
     const norm = (x) => (isWin ? path.resolve(x).toLowerCase() : path.resolve(x));
-    return norm(file).startsWith(norm(P.walls) + path.sep);
+    return [P.walls, P.orig, P.cache].some((d) => norm(file).startsWith(norm(d) + path.sep));
   }
 
   function clearDir(dir) {
@@ -277,21 +284,81 @@ function main() {
     let ext = path.extname(src).toLowerCase();
     const plain = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'];
     const stamp = Date.now();
-    clearDir(P.orig);
     if (!ext) ext = '.jpg'; // Windows 的 TranscodedWallpaper 没有后缀，内容是 JPEG
+    let dest;
     if (plain.includes(ext)) {
-      const dest = path.join(P.orig, `original-${stamp}${ext}`);
+      dest = path.join(P.orig, `original-${stamp}${ext}`);
       fs.copyFileSync(src, dest);
-      return dest;
-    }
-    if (isMac) {
+    } else if (isMac) {
       // heic 等格式：用系统自带的 sips 转成 png
-      const dest = path.join(P.orig, `original-${stamp}.png`);
+      dest = path.join(P.orig, `original-${stamp}.png`);
       await run('/usr/bin/sips', ['-s', 'format', 'png', src, '--out', dest]);
-      return dest;
+    } else {
+      throw new Error('暂不支持这种格式的壁纸');
     }
-    throw new Error('暂不支持这种格式的壁纸');
+    // 新的备份成功后，才删掉旧的
+    for (const f of fs.readdirSync(P.orig)) if (path.join(P.orig, f) !== dest) fs.rmSync(path.join(P.orig, f), { force: true });
+    return dest;
   }
+
+  // ---------- 壁纸文件夹轮换 ----------
+  const IMG_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.heic']);
+
+  function listImages(dir, depth = 2) {
+    const out = [];
+    let ents = [];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+    for (const e of ents) {
+      if (e.name.startsWith('.')) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { if (depth > 0) out.push(...listImages(full, depth - 1)); }
+      else if (IMG_EXT.has(path.extname(e.name).toLowerCase())) out.push(full);
+    }
+    return out;
+  }
+
+  // 从文件夹里随机挑一张（尽量不和上一张重复），记下来并返回可直接加载的图片路径
+  async function nextPick(folder) {
+    try {
+      if (!folder || !fs.existsSync(folder)) return { ok: false, path: '', error: '找不到这个文件夹，请重新选择' };
+      const all = listImages(folder);
+      if (!all.length) return { ok: false, path: '', error: '这个文件夹里没有图片' };
+      const c = loadConfig();
+      const last = c.lastPick || '';
+      const pool = all.length > 1 ? all.filter((f) => f !== c.lastPickSource) : all;
+      const src = pool[Math.floor(Math.random() * pool.length)];
+      let file = src;
+      if (path.extname(src).toLowerCase() === '.heic') {
+        if (!isMac) return { ok: false, path: '', error: '这张是 HEIC 图片，当前系统打不开' };
+        file = path.join(P.cache, `pick-${Date.now()}.png`);
+        await run('/usr/bin/sips', ['-s', 'format', 'png', src, '--out', file]);
+      }
+      c.lastPick = file;
+      c.lastPickSource = src;
+      c.lastRotateAt = Date.now();
+      saveConfig(c);
+      for (const f of fs.readdirSync(P.cache)) if (path.join(P.cache, f) !== file) fs.rmSync(path.join(P.cache, f), { recursive: true, force: true });
+      return { ok: true, path: file, error: '' };
+    } catch (e) {
+      return { ok: false, path: '', error: e.message || String(e) };
+    }
+  }
+
+  let rotating = false;
+  async function rotateTick(force) {
+    if (rotating || !win) return;
+    const c = loadConfig();
+    if (!c.background || c.background.type !== 'folder') return;
+    if (!force && !(c.rotateMinutes > 0 && Date.now() - (c.lastRotateAt || 0) >= c.rotateMinutes * 60000)) return;
+    rotating = true;
+    try {
+      const r = await nextPick(c.background.folder || c.rotateFolder);
+      if (r.ok) win.webContents.send('auto-apply', { rotate: true });
+    } finally {
+      rotating = false;
+    }
+  }
+  setInterval(() => rotateTick(false), 20000);
 
   // 读取系统当前壁纸；如果它不是本 App 生成的，就当作「原壁纸」备份起来
   async function captureOriginal() {
@@ -303,6 +370,11 @@ function main() {
         if (fs.existsSync(cur) && fs.statSync(cur).isFile()) {
           c.originalWallpaper = await backupFile(cur);
           c.originalSource = cur;
+          // 如果它旁边还有一堆图片（比如你的壁纸文件夹），记下来当作轮换的默认文件夹
+          const dir = path.dirname(cur);
+          if (!/^\/System\/|^\/Library\/Desktop Pictures|[\\/]Windows[\\/]/i.test(dir) && listImages(dir, 0).length >= 3) {
+            c.originalFolder = dir;
+          }
           saveConfig(c);
         } else {
           note = '当前壁纸是动态或视频壁纸，没法直接读取';
@@ -409,7 +481,7 @@ function main() {
   ipcMain.handle('config:get', () => ({ ...loadConfig(), platform: process.platform }));
   ipcMain.handle('config:save', (_e, c) => {
     const cur = loadConfig();
-    const next = { ...cur, ...c, originalWallpaper: cur.originalWallpaper, originalSource: cur.originalSource };
+    const next = { ...cur, ...c, originalWallpaper: cur.originalWallpaper, originalSource: cur.originalSource, originalFolder: cur.originalFolder, lastPick: cur.lastPick, lastPickSource: cur.lastPickSource, lastRotateAt: cur.lastRotateAt };
     delete next.platform;
     saveConfig(next);
     return true;
@@ -436,6 +508,24 @@ function main() {
     return dest;
   });
 
+
+
+  ipcMain.handle('folder:choose', async () => {
+    const c = loadConfig();
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择放壁纸的文件夹',
+      properties: ['openDirectory'],
+      defaultPath: c.rotateFolder || c.originalFolder || app.getPath('pictures'),
+    });
+    return r.canceled || !r.filePaths[0] ? '' : r.filePaths[0];
+  });
+  ipcMain.handle('folder:default', () => {
+    const c = loadConfig();
+    const f = c.rotateFolder || c.originalFolder;
+    return f && fs.existsSync(f) ? f : '';
+  });
+  ipcMain.handle('folder:next', (_e, folder) => nextPick(folder));
+  ipcMain.handle('folder:count', (_e, folder) => listImages(folder).length);
 
   ipcMain.handle('original:capture', () => captureOriginal());
 

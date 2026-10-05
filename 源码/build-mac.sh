@@ -5,7 +5,7 @@ export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
 VER_E=41.0.0
-VER=2.2.0
+VER=2.2.1
 NAME="桌面提醒"
 OUT="$ROOT/../桌面提醒安装包"
 WORK="$ROOT/work"

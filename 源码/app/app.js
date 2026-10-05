@@ -120,7 +120,39 @@
   titleEl.value = cfg.title || '';
   textEl.value = cfg.text || '';
   titleEl.addEventListener('input', () => { cfg.title = titleEl.value; schedule(); });
-  textEl.addEventListener('input', () => { cfg.text = textEl.value; schedule(); });
+  textEl.addEventListener('input', (e) => {
+    if (!e.isComposing && /^(delete|insertFromPaste|insertFromDrop)/.test(e.inputType || '')) renumber();
+    cfg.text = textEl.value;
+    schedule();
+  });
+
+  // 编号列表：在中间插入、删除、粘贴后，同一段连续的编号自动重新排序
+  function renumber() {
+    const v = textEl.value, caret = textEl.selectionStart;
+    const lines = v.split('\n');
+    let start = 0, outLen = 0, newCaret = caret, run = null;
+    const out = lines.map((line) => {
+      const m = line.match(/^(\s*)(\d{1,3})([.、)）]\s*)(.*)$/);
+      let nl = line;
+      if (m) {
+        if (run && run.indent === m[1]) run.n++; else run = { indent: m[1], n: Number(m[2]) };
+        nl = m[1] + run.n + m[3] + m[4];
+      } else run = null;
+      if (caret >= start && caret <= start + line.length) {
+        const off = caret - start;
+        const prefix = m ? (m[1] + m[2] + m[3]).length : 0;
+        newCaret = outLen + off + (m && off >= prefix ? nl.length - line.length : 0);
+      }
+      start += line.length + 1;
+      outLen += nl.length + 1;
+      return nl;
+    });
+    const next = out.join('\n');
+    if (next !== v) {
+      textEl.value = next;
+      textEl.setSelectionRange(newCaret, newCaret);
+    }
+  }
 
   // 回车时自动延续列表符号
   textEl.addEventListener('keydown', (e) => {
@@ -140,6 +172,7 @@
     } else {
       textEl.setRangeText('\n' + prefix, pos, textEl.selectionEnd, 'end');
     }
+    renumber();
     textEl.dispatchEvent(new Event('input'));
   });
 

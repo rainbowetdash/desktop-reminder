@@ -11,10 +11,16 @@
     return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日  星期${'日一二三四五六'[d.getDay()]}`;
   }
 
+  // 待办框：行首（可在 - 或 1. 之后）写 [ ] 或 [x]
+  const BOX = /^\[([ xX✓√✔]?)\]\s*(.*)$/;
+
   function parseLines(text) {
-    return (text || '').split('\n').map((raw) => {
+    return (text || '').split('\n').map((raw, idx) => {
       const t = raw.trim();
       if (!t) return { kind: 'gap' };
+      const pm = t.match(/^(?:[-*•·]|\d{1,3}[.、)）])\s*(.*)$/);
+      const bm = (pm ? pm[1] : t).match(BOX);
+      if (bm) return { kind: 'todo', done: bm[1].trim() !== '', body: bm[2], idx };
       let m = t.match(/^[-*•·]\s*(.*)$/);
       if (m) return { kind: 'bullet', marker: '•', body: m[1] };
       m = t.match(/^(\d{1,3})[.、)）]\s*(.*)$/);
@@ -116,6 +122,7 @@
     for (const l of lines) if (l.kind === 'num') numIndent = Math.max(numIndent, ctx.measureText(l.marker).width + base * 0.5);
 
     // 排版
+    const todoIndent = base * 1.4;
     const rows = []; // {font, text, x(offset), h, color, marker}
     let natural = 0;
     const title = (cfg.title || '').trim();
@@ -126,9 +133,12 @@
         rows.push({ font: F.title, text: t, x: 0, h: base * 1.45 * 1.28, role: 'title' });
       }
     }
-    if (cfg.showDate) {
+    const todos = lines.filter((l) => l.kind === 'todo');
+    const doneCount = todos.filter((l) => l.done).length;
+    if (cfg.showDate || todos.length) {
       ctx.font = F.date;
-      const d = dateString();
+      let d = cfg.showDate ? dateString() : '';
+      if (todos.length) d += (d ? '  ·  ' : '') + `已完成 ${doneCount}/${todos.length}`;
       natural = Math.max(natural, ctx.measureText(d).width);
       rows.push({ font: F.date, text: d, x: 0, h: base * 0.68 * 1.5, role: 'sub', gapBefore: base * 0.05 });
     }
@@ -137,14 +147,15 @@
     ctx.font = F.body;
     for (const l of lines) {
       if (l.kind === 'gap') { rows.push({ gap: base * 0.55 }); continue; }
-      const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : 0;
+      const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : l.kind === 'todo' ? todoIndent : 0;
       const parts = wrap(ctx, l.body, maxTextW - indent);
       parts.forEach((p, i) => {
         natural = Math.max(natural, indent + ctx.measureText(p).width);
         rows.push({
           font: F.body, text: p, x: indent, h: base * 1.48, role: 'body',
-          marker: i === 0 && l.kind !== 'plain' ? l.marker : null,
+          marker: i === 0 && l.kind !== 'plain' && l.kind !== 'todo' ? l.marker : null,
           markerKind: l.kind,
+          todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx } : null,
           gapBefore: first ? headGap : (i === 0 ? base * 0.28 : 0),
         });
         first = false;
@@ -207,6 +218,8 @@
       ctx.shadowBlur = base * 0.45;
       ctx.shadowOffsetY = base * 0.06;
     }
+    const hits = [];
+    const accent = '#5B7CFA';
     let cy = y + padY;
     for (const r of rows) {
       cy += (r.gap || 0) + (r.gapBefore || 0);
@@ -224,12 +237,51 @@
           ctx.fillText(r.marker, x + padX, baseline);
         }
       }
+      const done = !!(r.todo && r.todo.done);
+      if (r.todo && r.todo.first) {
+        const bs = base * 0.66;
+        const bx = x + padX + base * 0.04, by = baseline - size * 0.86 + (r.h - bs) / 2 + base * 0.02;
+        ctx.save();
+        ctx.shadowColor = 'transparent';
+        roundRectPath(ctx, bx, by, bs, bs, bs * 0.24);
+        if (done) {
+          ctx.fillStyle = accent;
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = bs * 0.14;
+          ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.beginPath();
+          ctx.moveTo(bx + bs * 0.24, by + bs * 0.53);
+          ctx.lineTo(bx + bs * 0.43, by + bs * 0.72);
+          ctx.lineTo(bx + bs * 0.77, by + bs * 0.30);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = mark;
+          ctx.lineWidth = Math.max(1.2, base * 0.07);
+          ctx.stroke();
+        }
+        ctx.restore();
+        hits.push({ line: r.todo.line, x: bx - base * 0.3, y: cy, w: bs + base * 0.6, h: r.h });
+      }
+      ctx.save();
+      if (done) ctx.globalAlpha = 0.42;
       ctx.fillStyle = r.role === 'sub' ? sub : ink;
       ctx.fillText(r.text, x + padX + r.x, baseline);
+      if (done && r.text) {
+        const tw = ctx.measureText(r.text).width;
+        ctx.shadowColor = 'transparent';
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = Math.max(1, base * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(x + padX + r.x, baseline - size * 0.3);
+        ctx.lineTo(x + padX + r.x + tw, baseline - size * 0.3);
+        ctx.stroke();
+      }
+      ctx.restore();
       cy += r.h;
     }
     ctx.shadowColor = 'transparent';
-    return { panel: { x, y, w: pw, h: ph } };
+    return { panel: { x, y, w: pw, h: ph }, hits, progress: { done: doneCount, total: todos.length } };
   }
 
   window.WallpaperRenderer = { renderWallpaper, paintBackground, fontStack, dateString };

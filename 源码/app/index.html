@@ -22,9 +22,15 @@
       <div class="field field-grow">
         <div class="field-head">
           <label for="text">提醒内容</label>
-          <span class="hint">一行一条，行首写 - 或 1. 会排成列表</span>
+          <span class="hint">一行一条，行首 - 或 1. 排成列表</span>
         </div>
         <textarea id="text" spellcheck="false" placeholder="- 周五前交报告&#10;- 给妈妈打电话"></textarea>
+        <div class="todo-tools">
+          <button id="addBox" class="btn-text" type="button" title="给当前行加上或去掉待办框，也可以直接在行首写 [ ]">☐ 待办框</button>
+          <button id="clearDone" class="btn-text" type="button" hidden>清除已完成</button>
+          <span id="todoInfo" class="todo-info"></span>
+          <span class="hint todo-hint">点右边预览里的方块来完成</span>
+        </div>
       </div>
 
       <div class="style-block">

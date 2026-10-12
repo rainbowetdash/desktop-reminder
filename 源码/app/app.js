@@ -67,7 +67,7 @@
       : bt === 'original' ? await loadImage(c.originalWallpaper)
       : bt === 'folder' ? await loadImage(c.lastPick) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
-    R.renderWallpaper(canvas, c, W, H, { image, ...fo });
+    return R.renderWallpaper(canvas, c, W, H, { image, ...fo });
   }
 
   // ---------- 预览 ----------
@@ -87,17 +87,57 @@
   }
 
   let renderSeq = 0;
+  let lastHits = [];
   async function refreshPreview() {
     const seq = ++renderSeq;
     const { w, h } = layoutPreview();
     if (w < 10 || h < 10) return;
     const dpr = window.devicePixelRatio || 1;
     const off = document.createElement('canvas');
-    await renderTo(off, cfg, Math.round(w * dpr), Math.round(h * dpr));
+    const res = await renderTo(off, cfg, Math.round(w * dpr), Math.round(h * dpr));
     if (seq !== renderSeq) return;
+    lastHits = res.hits || [];
+    syncTodoInfo(res.progress);
     preview.width = off.width;
     preview.height = off.height;
     preview.getContext('2d').drawImage(off, 0, 0);
+  }
+
+  // 点预览里的待办方块：在文字里把 [ ] 和 [x] 互相切换
+  function hitAt(e) {
+    const r = preview.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * preview.width;
+    const py = ((e.clientY - r.top) / r.height) * preview.height;
+    return lastHits.find((h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h);
+  }
+  preview.addEventListener('mousemove', (e) => { preview.style.cursor = hitAt(e) ? 'pointer' : ''; });
+  preview.addEventListener('click', (e) => {
+    const h = hitAt(e);
+    if (h) toggleTodo(h.line);
+  });
+
+  let autoTimer = null;
+  function autoApplySoon() {
+    // 已经应用过壁纸的话，勾选后桌面也同步更新
+    if (!cfg.lastAppliedDate) return;
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => applyWallpaper(true), 900);
+  }
+
+  function setText(next) {
+    cfg.text = next;
+    textEl.value = next;
+    schedule();
+  }
+
+  function toggleTodo(line) {
+    const lines = (cfg.text || '').split('\n');
+    const re = /^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[([ xX✓√✔]?)\]/;
+    const m = lines[line] && lines[line].match(re);
+    if (!m) return;
+    lines[line] = lines[line].replace(re, (all, pre, mark) => `${pre}[${mark.trim() ? ' ' : 'x'}]`);
+    setText(lines.join('\n'));
+    autoApplySoon();
   }
 
   let timer = null;
@@ -162,7 +202,13 @@
     const line = v.slice(lineStart, pos);
     let m = line.match(/^(\s*[-*•]\s+)(.*)$/);
     let prefix = null;
-    if (m) prefix = m[2].trim() ? m[1] : '';
+    const tm = line.match(/^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[[ xX✓√✔]?\]\s*(.*)$/);
+    if (tm) {
+      // 待办行：回车接着一个新的空待办；空待办再回车就结束
+      const lead = tm[1].match(/^(\s*)(\d{1,3})([.、)）]\s*)$/);
+      const next = lead ? lead[1] + (Number(lead[2]) + 1) + lead[3] : tm[1];
+      prefix = tm[2].trim() ? next + '[ ] ' : '';
+    } else if (m) prefix = m[2].trim() ? m[1] : '';
     else if ((m = line.match(/^(\s*)(\d{1,3})([.、)）]\s*)(.*)$/))) prefix = m[4].trim() ? m[1] + (Number(m[2]) + 1) + m[3] : '';
     if (prefix === null) return;
     e.preventDefault();
@@ -175,6 +221,43 @@
     renumber();
     textEl.dispatchEvent(new Event('input'));
   });
+
+  // 待办工具
+  function selectedLineRange() {
+    const v = textEl.value;
+    const a = v.lastIndexOf('\n', textEl.selectionStart - 1) + 1;
+    let b = v.indexOf('\n', textEl.selectionEnd);
+    if (b < 0) b = v.length;
+    return [a, b];
+  }
+  $('addBox').addEventListener('click', () => {
+    const [a, b] = selectedLineRange();
+    const block = textEl.value.slice(a, b).split('\n');
+    const re = /^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[[ xX✓√✔]?\]\s?/;
+    const all = block.every((l) => !l.trim() || re.test(l));
+    const out = block.map((l) => {
+      if (!l.trim()) return l;
+      if (all) return l.replace(re, '$1');
+      if (re.test(l)) return l;
+      const m = l.match(/^(\s*(?:[-*•·]|\d{1,3}[.、)）])\s*)(.*)$/);
+      return m ? m[1] + '[ ] ' + m[2] : l.replace(/^(\s*)/, '$1[ ] ');
+    }).join('\n');
+    textEl.focus();
+    textEl.setRangeText(out, a, b, 'select');
+    textEl.dispatchEvent(new Event('input'));
+  });
+  $('clearDone').addEventListener('click', () => {
+    const re = /^\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?\[[xX✓√✔]\]/;
+    const kept = (cfg.text || '').split('\n').filter((l) => !re.test(l));
+    setText(kept.join('\n'));
+    textEl.dispatchEvent(new Event('input'));
+    autoApplySoon();
+  });
+  function syncTodoInfo(p) {
+    const total = p ? p.total : 0;
+    $('todoInfo').textContent = total ? `已完成 ${p.done}/${total}` : '';
+    $('clearDone').hidden = !(p && p.done);
+  }
 
   // 位置
   const posGrid = $('posGrid');

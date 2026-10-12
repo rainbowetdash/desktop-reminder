@@ -64,6 +64,12 @@ if ls "$ROOT"/winparts/part-* >/dev/null 2>&1; then
   echo "已放好 Windows 安装包"
 fi
 
+if [ "${NO_INSTALL:-0}" = 1 ]; then
+  echo "== 跳过安装到本机（NO_INSTALL=1）"
+  echo "== 全部完成 $(date)"
+  exit 0
+fi
+
 echo "== 安装到本机"
 HOST=$(uname -m); [ "$HOST" = x86_64 ] && HOST=x64
 pkill -x DesktopNote 2>/dev/null || true

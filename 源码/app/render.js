@@ -115,6 +115,16 @@
 
     const maxTextW = W * (cfg.position && cfg.position[1] === 'c' ? 0.42 : 0.34);
     const lines = parseLines(cfg.text);
+    // 日历里属于这一天的条目，接在常驻内容后面
+    const extra = (opts && opts.entries) || [];
+    if (extra.length) {
+      if (lines.some((l) => l.kind !== 'gap')) lines.push({ kind: 'divider', body: '今日安排' });
+      for (const e of extra) {
+        lines.push(e.kind === 'todo'
+          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id }
+          : { kind: 'bullet', marker: '•', body: e.text });
+      }
+    }
 
     ctx.font = F.body;
     const bulletIndent = base * 1.1;
@@ -147,6 +157,14 @@
     ctx.font = F.body;
     for (const l of lines) {
       if (l.kind === 'gap') { rows.push({ gap: base * 0.55 }); continue; }
+      if (l.kind === 'divider') {
+        ctx.font = F.date;
+        natural = Math.max(natural, ctx.measureText(l.body).width);
+        rows.push({ font: F.date, text: l.body, x: 0, h: base * 0.68 * 1.5, role: 'sub', gapBefore: base * 0.55 });
+        ctx.font = F.body;
+        first = false;
+        continue;
+      }
       const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : l.kind === 'todo' ? todoIndent : 0;
       const parts = wrap(ctx, l.body, maxTextW - indent);
       parts.forEach((p, i) => {
@@ -155,7 +173,7 @@
           font: F.body, text: p, x: indent, h: base * 1.48, role: 'body',
           marker: i === 0 && l.kind !== 'plain' && l.kind !== 'todo' ? l.marker : null,
           markerKind: l.kind,
-          todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx } : null,
+          todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx, entryId: l.entryId } : null,
           gapBefore: first ? headGap : (i === 0 ? base * 0.28 : 0),
         });
         first = false;
@@ -261,7 +279,7 @@
           ctx.stroke();
         }
         ctx.restore();
-        hits.push({ line: r.todo.line, x: bx - base * 0.3, y: cy, w: bs + base * 0.6, h: r.h });
+        hits.push({ line: r.todo.line, entryId: r.todo.entryId, x: bx - base * 0.3, y: cy, w: bs + base * 0.6, h: r.h });
       }
       ctx.save();
       if (done) ctx.globalAlpha = 0.42;

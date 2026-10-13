@@ -30,6 +30,7 @@ function main() {
     walls: path.join(USER, 'wallpapers'),
     orig: path.join(USER, 'original'),
     cache: path.join(USER, 'pick-cache'),
+    entries: path.join(USER, 'entries.json'),
   };
   for (const d of [P.fonts, P.bgs, P.walls, P.orig, P.cache]) fs.mkdirSync(d, { recursive: true });
 
@@ -391,11 +392,46 @@ function main() {
     };
   }
 
+  // ---------- 日历条目 ----------
+  function loadEntries() {
+    try {
+      const list = JSON.parse(fs.readFileSync(P.entries, 'utf8'));
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveEntries(list) {
+    const clean = (Array.isArray(list) ? list : [])
+      .filter((e) => e && typeof e.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && typeof e.text === 'string')
+      .map((e) => ({
+        id: e.id,
+        date: e.date,
+        kind: e.kind === 'note' ? 'note' : 'todo',
+        text: e.text.slice(0, 500),
+        done: !!e.done,
+        createdAt: Number(e.createdAt) || Date.now(),
+      }));
+    const tmp = P.entries + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(clean, null, 2));
+    fs.renameSync(tmp, P.entries); // 先写临时文件再替换，避免写到一半断电损坏
+    return clean;
+  }
+
   function checkNewDay() {
     const c = loadConfig();
-    if (c.lastAppliedDate && c.showDate && c.lastAppliedDate !== today() && win) {
+    // 有「显示日期」或者日历里有条目，隔天就要重新生成壁纸
+    const needs = c.showDate || loadEntries().length > 0;
+    if (c.lastAppliedDate && needs && c.lastAppliedDate !== today() && win) {
       win.webContents.send('auto-apply', {});
     }
+  }
+
+  // 本地午夜过后几秒精确刷新一次（电脑睡眠跨午夜的情况由 resume 事件补上）
+  function scheduleMidnight() {
+    const n = new Date();
+    const next = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1, 0, 0, 5);
+    setTimeout(() => { checkNewDay(); scheduleMidnight(); }, next - n);
   }
 
   // ---------- 字体 ----------
@@ -527,6 +563,11 @@ function main() {
   ipcMain.handle('folder:next', (_e, folder) => nextPick(folder));
   ipcMain.handle('folder:count', (_e, folder) => listImages(folder).length);
 
+  ipcMain.handle('entries:get', () => loadEntries());
+  ipcMain.handle('entries:save', (_e, list) => {
+    try { saveEntries(list); return true; } catch { return false; }
+  });
+
   ipcMain.handle('original:capture', () => captureOriginal());
 
   ipcMain.handle('original:pick', async () => {
@@ -639,6 +680,7 @@ function main() {
     createWindow(!startedAtLogin);
     createTray();
     setInterval(checkNewDay, 10 * 60 * 1000);
+    scheduleMidnight();
     powerMonitor.on('resume', () => setTimeout(checkNewDay, 5000));
     powerMonitor.on('unlock-screen', () => setTimeout(checkNewDay, 3000));
   });

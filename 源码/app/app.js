@@ -6,6 +6,8 @@
   if (api.platform === 'darwin') document.body.classList.add('mac');
 
   let cfg = await api.getConfig();
+  const Cal = window.Cal;
+  let entries = await api.getEntries();
   let screenSize = await api.screenSize();
   let installed = new Set(await api.fontsInstalled());
   const loadedFontCss = new Set();
@@ -67,7 +69,7 @@
       : bt === 'original' ? await loadImage(c.originalWallpaper)
       : bt === 'folder' ? await loadImage(c.lastPick) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
-    return R.renderWallpaper(canvas, c, W, H, { image, ...fo });
+    return R.renderWallpaper(canvas, c, W, H, { image, entries: Cal.entriesFor(entries, Cal.todayKey()), ...fo });
   }
 
   // ---------- 预览 ----------
@@ -113,7 +115,9 @@
   preview.addEventListener('mousemove', (e) => { preview.style.cursor = hitAt(e) ? 'pointer' : ''; });
   preview.addEventListener('click', (e) => {
     const h = hitAt(e);
-    if (h) toggleTodo(h.line);
+    if (!h) return;
+    if (h.entryId) toggleEntry(h.entryId);
+    else toggleTodo(h.line);
   });
 
   let autoTimer = null;
@@ -128,6 +132,23 @@
     cfg.text = next;
     textEl.value = next;
     schedule();
+  }
+
+  function saveEntries() { return api.saveEntries(entries); }
+
+  // 日历里的待办：点预览方块或日历里的勾选框，都走这里
+  function toggleEntry(id) {
+    const e = entries.find((x) => x.id === id);
+    if (!e) return;
+    e.done = !e.done;
+    saveEntries();
+    entriesChanged(e.date);
+  }
+
+  function entriesChanged(dateKey) {
+    if (!$('cal').hidden) renderCalendar();
+    refreshPreview();
+    if (dateKey === Cal.todayKey()) autoApplySoon(); // 改的是今天，桌面也同步
   }
 
   function toggleTodo(line) {
@@ -505,6 +526,7 @@
       applyBtn.click();
     }
     if (e.key === 'Escape' && !$('fontDrawer').hidden) closeDrawer();
+    else if (e.key === 'Escape' && !$('cal').hidden) closeCal();
   });
   api.onAutoApply(async () => {
     const fresh = await api.getConfig();
@@ -512,6 +534,145 @@
     applyWallpaper(true);
     refreshPreview();
   });
+
+  // ---------- 日历提醒 ----------
+  const calEl = $('cal'), calScrim = $('calScrim');
+  const now0 = new Date();
+  let calYear = now0.getFullYear(), calMonth = now0.getMonth();
+  let calSel = Cal.todayKey();
+  let calKind = 'todo';
+
+  function openCal() {
+    calEl.hidden = false;
+    calScrim.hidden = false;
+    renderCalendar();
+    $('calInput').focus();
+  }
+  function closeCal() {
+    calEl.hidden = true;
+    calScrim.hidden = true;
+    $('calOpen').focus();
+  }
+  function gotoDate(key) {
+    const d = Cal.parseKey(key);
+    calYear = d.getFullYear(); calMonth = d.getMonth(); calSel = key;
+    renderCalendar();
+  }
+
+  function renderCalendar() {
+    $('calTitle').textContent = `${calYear}年${calMonth + 1}月`;
+    const sum = Cal.summarize(entries);
+    const today = Cal.todayKey();
+    const grid = $('calGrid');
+    grid.innerHTML = '';
+    for (const c of Cal.monthGrid(calYear, calMonth)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cal-cell' + (c.inMonth ? '' : ' is-out') + (c.key === today ? ' is-today' : '') + (c.key === calSel ? ' is-sel' : '');
+      b.setAttribute('role', 'gridcell');
+      const s = sum[c.key];
+      const parts = [];
+      if (s) {
+        if (s.todo) parts.push(`${s.todo}条待办${s.done === s.todo ? '，已全部完成' : ''}`);
+        if (s.note) parts.push(`${s.note}条提醒`);
+      }
+      b.setAttribute('aria-label', `${Cal.parseKey(c.key).getMonth() + 1}月${c.day}日` + (parts.length ? '，' + parts.join('，') : '，没有安排'));
+      const num = document.createElement('span');
+      num.textContent = c.day;
+      const marks = document.createElement('span');
+      marks.className = 'cal-marks';
+      if (s) {
+        if (s.todo) { const d = document.createElement('i'); d.className = 'dot dot-todo' + (s.done === s.todo ? ' all-done' : ''); marks.appendChild(d); }
+        if (s.note) { const d = document.createElement('i'); d.className = 'dot dot-note'; marks.appendChild(d); }
+        if (s.todo + s.note > 1) { const n = document.createElement('span'); n.className = 'cal-count'; n.textContent = s.todo + s.note; marks.appendChild(n); }
+      }
+      b.append(num, marks);
+      b.addEventListener('click', () => {
+        if (!c.inMonth) { gotoDate(c.key); } else { calSel = c.key; renderCalendar(); }
+        $('calInput').focus();
+      });
+      grid.appendChild(b);
+    }
+    renderDay();
+  }
+
+  function renderDay() {
+    const d = Cal.parseKey(calSel);
+    const t = $('calDayTitle');
+    t.textContent = `${d.getMonth() + 1}月${d.getDate()}日 星期${Cal.weekdayName(d)}`;
+    if (calSel === Cal.todayKey()) {
+      const tag = document.createElement('span');
+      tag.className = 'cal-tag';
+      tag.textContent = '今天';
+      t.appendChild(tag);
+    }
+    const list = $('calList');
+    list.innerHTML = '';
+    const items = Cal.entriesFor(entries, calSel);
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'cal-empty';
+      li.textContent = '这一天还没有安排，在下面写一条吧。';
+      list.appendChild(li);
+    }
+    for (const e of items) {
+      const li = document.createElement('li');
+      li.className = 'cal-item' + (e.kind === 'todo' && e.done ? ' done' : '');
+      const txt = document.createElement('span');
+      txt.className = 'txt';
+      txt.textContent = e.text;
+      if (e.kind === 'todo') {
+        const lab = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!e.done;
+        cb.addEventListener('change', () => toggleEntry(e.id));
+        lab.append(cb, txt);
+        li.appendChild(lab);
+      } else {
+        const dot = document.createElement('i');
+        dot.className = 'bullet';
+        li.append(dot, txt);
+      }
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del';
+      del.title = '删除';
+      del.setAttribute('aria-label', '删除这一条');
+      del.textContent = '×';
+      del.addEventListener('click', () => {
+        entries = entries.filter((x) => x.id !== e.id);
+        saveEntries();
+        entriesChanged(e.date);
+      });
+      li.appendChild(del);
+      list.appendChild(li);
+    }
+  }
+
+  $('calForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const input = $('calInput');
+    const text = input.value.trim();
+    if (!text) return;
+    entries.push({ id: Cal.uid(), date: calSel, kind: calKind, text, done: false, createdAt: Date.now() });
+    input.value = '';
+    saveEntries();
+    entriesChanged(calSel);
+    input.focus();
+  });
+  for (const b of $('calKind').children) {
+    b.addEventListener('click', () => {
+      calKind = b.dataset.v;
+      for (const x of $('calKind').children) x.setAttribute('aria-checked', String(x === b));
+    });
+  }
+  $('calOpen').addEventListener('click', openCal);
+  $('calClose').addEventListener('click', closeCal);
+  calScrim.addEventListener('click', closeCal);
+  $('calPrev').addEventListener('click', () => { const d = new Date(calYear, calMonth - 1, 1); calYear = d.getFullYear(); calMonth = d.getMonth(); renderCalendar(); });
+  $('calNext').addEventListener('click', () => { const d = new Date(calYear, calMonth + 1, 1); calYear = d.getFullYear(); calMonth = d.getMonth(); renderCalendar(); });
+  $('calToday').addEventListener('click', () => gotoDate(Cal.todayKey()));
 
   // ---------- 字体库 ----------
   const drawer = $('fontDrawer'), scrim = $('fontScrim'), grid = $('fontGrid');

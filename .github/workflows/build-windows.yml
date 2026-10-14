@@ -20,6 +20,15 @@ jobs:
         run: |
           npm install
           npx electron-builder --win --x64 --publish never
+      - name: Verify packaged files
+        working-directory: 源码/app
+        shell: bash
+        run: |
+          npx --yes @electron/asar list dist/win-unpacked/resources/app.asar > asar.txt
+          for f in calendar.js app.js render.js main.js preload.js index.html styles.css; do
+            grep -q "$f" asar.txt || { echo "安装包里缺少 $f"; exit 1; }
+          done
+          echo "安装包内容检查通过"
       - name: Upload to release
         shell: bash
         env:

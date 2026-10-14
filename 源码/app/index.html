@@ -18,25 +18,44 @@
   <main class="layout">
     <!-- 左：写内容 -->
     <section class="sheet" aria-label="编辑提醒">
-      <div class="field">
-        <label for="title">标题</label>
-        <input id="title" type="text" placeholder="比如：这周要做的事" autocomplete="off">
+      <div class="seg tabs" id="tabs" role="tablist">
+        <button type="button" role="tab" data-t="content" aria-selected="true" class="on">内容</button>
+        <button type="button" role="tab" data-t="style" aria-selected="false">外观</button>
       </div>
 
-      <div class="field field-grow">
-        <div class="field-head">
-          <label for="text">提醒内容</label>
-          <span class="hint">一行一条，行首 - 或 1. 排成列表</span>
+      <div class="pane" id="paneContent">
+        <div class="field">
+          <label for="title">标题</label>
+          <input id="title" type="text" placeholder="比如：这周要做的事" autocomplete="off">
         </div>
-        <textarea id="text" spellcheck="false" placeholder="- 周五前交报告&#10;- 给妈妈打电话"></textarea>
-        <div class="todo-tools">
-          <button id="addBox" class="btn-text" type="button" title="给当前行加上或去掉待办框，也可以直接在行首写 [ ]">☐ 待办框</button>
-          <button id="clearDone" class="btn-text" type="button" hidden>清除已完成</button>
-          <span id="todoInfo" class="todo-info"></span>
-          <span class="hint todo-hint">点右边预览里的方块来完成</span>
+
+        <div class="today" aria-label="今天的安排">
+          <div class="today-head">
+            <h3>今天 <span id="todayDate" class="hint"></span></h3>
+            <span id="todayProgress" class="todo-info"></span>
+            <button id="todayClear" class="btn-text" type="button" hidden>清除已完成</button>
+          </div>
+          <form class="add-form" id="addForm" autocomplete="off">
+            <input id="addInput" type="text" placeholder="添加一条，回车就好" maxlength="200" aria-label="添加一条待办或提醒">
+            <button id="addKind" class="chip" type="button" data-v="todo" title="点一下切换：待办 / 提醒">待办</button>
+            <input id="addDate" class="chip date-chip" type="date" title="到这一天才会显示在桌面上" aria-label="日期">
+            <button class="btn-primary add-btn" type="submit" aria-label="添加">添加</button>
+          </form>
+          <ul class="today-list" id="todayList"></ul>
         </div>
+
+        <details class="perm" id="perm" open>
+          <summary>常驻提醒 <span class="hint">每天都显示在桌面上</span></summary>
+          <textarea id="text" spellcheck="false" placeholder="- 周五前交报告&#10;- 给妈妈打电话"></textarea>
+          <div class="todo-tools">
+            <button id="addBox" class="btn-text" type="button" title="给当前行加上或去掉待办框，也可以直接在行首写 [ ]">☐ 待办框</button>
+            <button id="clearDone" class="btn-text" type="button" hidden>清除已完成</button>
+            <span class="hint todo-hint">一行一条，行首写 - 或 1. 排成列表</span>
+          </div>
+        </details>
       </div>
 
+      <div class="pane" id="paneStyle" hidden>
       <div class="style-block">
         <div class="row">
           <span class="row-label">字体</span>
@@ -74,6 +93,7 @@
           <input id="opacity" type="range" min="0.1" max="0.9" step="0.01">
           <output id="opacityOut" class="num">55%</output>
         </div>
+      </div>
       </div>
     </section>
 
@@ -122,6 +142,11 @@
       </footer>
     </section>
   </main>
+
+  <div class="toast" id="toast" role="status" hidden>
+    <span id="toastMsg"></span>
+    <button id="toastAct" class="btn-text" type="button"></button>
+  </div>
 
   <!-- 日历提醒 -->
   <div class="drawer-scrim" id="calScrim" hidden></div>

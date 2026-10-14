@@ -4,6 +4,7 @@
   const R = window.WallpaperRenderer;
   const $ = (id) => document.getElementById(id);
   if (api.platform === 'darwin') document.body.classList.add('mac');
+  if (api.platform === 'win32') document.body.classList.add('win');
 
   let cfg = await api.getConfig();
   const Cal = window.Cal;
@@ -99,7 +100,7 @@
     const res = await renderTo(off, cfg, Math.round(w * dpr), Math.round(h * dpr));
     if (seq !== renderSeq) return;
     lastHits = res.hits || [];
-    syncTodoInfo(res.progress);
+    syncTodoInfo();
     preview.width = off.width;
     preview.height = off.height;
     preview.getContext('2d').drawImage(off, 0, 0);
@@ -136,19 +137,123 @@
 
   function saveEntries() { return api.saveEntries(entries); }
 
-  // 日历里的待办：点预览方块或日历里的勾选框，都走这里
-  function toggleEntry(id) {
+  // ---------- 提示条（带撤销）----------
+  let toastTimer = null;
+  function toast(msg, actLabel, onAct) {
+    $('toastMsg').textContent = msg;
+    const b = $('toastAct');
+    b.hidden = !actLabel;
+    b.textContent = actLabel || '';
+    b.onclick = () => { $('toast').hidden = true; if (onAct) onAct(); };
+    $('toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500);
+  }
+
+  // 待办的完成状态：点预览方块、今天的列表、日历里的勾选框，都走这里
+  function toggleEntry(id, quiet) {
     const e = entries.find((x) => x.id === id);
     if (!e) return;
     e.done = !e.done;
     saveEntries();
     entriesChanged(e.date);
+    if (quiet || !e.done) return;
+    const left = entries.filter((x) => x.date === e.date && x.kind === 'todo' && !x.done).length;
+    if (e.date === Cal.todayKey() && !left) toast('今天的待办全部完成了', '撤销', () => toggleEntry(id, true));
+    else toast(`已完成「${e.text.length > 16 ? e.text.slice(0, 16) + '…' : e.text}」`, '撤销', () => toggleEntry(id, true));
   }
 
   function entriesChanged(dateKey) {
+    renderToday();
     if (!$('cal').hidden) renderCalendar();
     refreshPreview();
     if (dateKey === Cal.todayKey()) autoApplySoon(); // 改的是今天，桌面也同步
+  }
+
+  // 一条日历条目的一行：勾选框 + 文字（点一下可以改）+ 删除。今天的列表和日历里共用
+  function entryItem(e) {
+    const li = document.createElement('li');
+    li.className = 'entry' + (e.kind === 'todo' && e.done ? ' done' : '');
+    if (e.kind === 'todo') {
+      const cb = document.createElement('button');
+      cb.type = 'button';
+      cb.className = 'check';
+      cb.setAttribute('role', 'checkbox');
+      cb.setAttribute('aria-checked', String(!!e.done));
+      cb.setAttribute('aria-label', e.done ? '取消完成' : '标记完成');
+      cb.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.4 6.4l2.4 2.4 4.8-5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      cb.addEventListener('click', () => toggleEntry(e.id));
+      li.appendChild(cb);
+    } else {
+      const dot = document.createElement('i');
+      dot.className = 'bullet';
+      li.appendChild(dot);
+    }
+    const txt = document.createElement('span');
+    txt.className = 'txt';
+    txt.textContent = e.text;
+    txt.title = '点一下修改';
+    txt.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'edit';
+      input.value = e.text;
+      input.maxLength = 200;
+      txt.replaceWith(input);
+      input.focus();
+      input.select();
+      let finished = false;
+      const finish = (save) => {
+        if (finished) return;
+        finished = true;
+        const v = input.value.trim();
+        if (save && v && v !== e.text) { e.text = v; saveEntries(); entriesChanged(e.date); }
+        else { input.replaceWith(txt); }
+      };
+      input.addEventListener('keydown', (ev) => {
+        if (ev.isComposing) return;
+        if (ev.key === 'Enter') finish(true);
+        else if (ev.key === 'Escape') { ev.stopPropagation(); finish(false); }
+      });
+      input.addEventListener('blur', () => finish(true));
+    });
+    li.appendChild(txt);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'del';
+    del.title = '删除';
+    del.setAttribute('aria-label', '删除这一条');
+    del.textContent = '×';
+    del.addEventListener('click', () => {
+      const idx = entries.findIndex((x) => x.id === e.id);
+      entries.splice(idx, 1);
+      saveEntries();
+      entriesChanged(e.date);
+      toast('已删除', '撤销', () => { entries.splice(Math.min(idx, entries.length), 0, e); saveEntries(); entriesChanged(e.date); });
+    });
+    li.appendChild(del);
+    return li;
+  }
+
+  // 主窗口里「今天」这一块
+  function renderToday() {
+    const key = Cal.todayKey();
+    const d = Cal.parseKey(key);
+    $('todayDate').textContent = `${d.getMonth() + 1}月${d.getDate()}日 星期${Cal.weekdayName(d)}`;
+    const items = Cal.entriesFor(entries, key);
+    const list = $('todayList');
+    list.innerHTML = '';
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'today-empty';
+      li.textContent = '今天还没有安排。在下面写一条，回车就能添加；想提前写以后的，改一下日期。';
+      list.appendChild(li);
+    }
+    for (const e of items) list.appendChild(entryItem(e));
+    const todos = items.filter((x) => x.kind === 'todo');
+    const done = todos.filter((x) => x.done).length;
+    $('todayProgress').textContent = todos.length ? `已完成 ${done}/${todos.length}` : '';
+    $('todayClear').hidden = !done;
   }
 
   function toggleTodo(line) {
@@ -274,10 +379,8 @@
     textEl.dispatchEvent(new Event('input'));
     autoApplySoon();
   });
-  function syncTodoInfo(p) {
-    const total = p ? p.total : 0;
-    $('todoInfo').textContent = total ? `已完成 ${p.done}/${total}` : '';
-    $('clearDone').hidden = !(p && p.done);
+  function syncTodoInfo() {
+    $('clearDone').hidden = !/\[[xX✓√✔]\]/.test(cfg.text || '');
   }
 
   // 位置
@@ -615,39 +718,7 @@
       li.textContent = '这一天还没有安排，在下面写一条吧。';
       list.appendChild(li);
     }
-    for (const e of items) {
-      const li = document.createElement('li');
-      li.className = 'cal-item' + (e.kind === 'todo' && e.done ? ' done' : '');
-      const txt = document.createElement('span');
-      txt.className = 'txt';
-      txt.textContent = e.text;
-      if (e.kind === 'todo') {
-        const lab = document.createElement('label');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = !!e.done;
-        cb.addEventListener('change', () => toggleEntry(e.id));
-        lab.append(cb, txt);
-        li.appendChild(lab);
-      } else {
-        const dot = document.createElement('i');
-        dot.className = 'bullet';
-        li.append(dot, txt);
-      }
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'del';
-      del.title = '删除';
-      del.setAttribute('aria-label', '删除这一条');
-      del.textContent = '×';
-      del.addEventListener('click', () => {
-        entries = entries.filter((x) => x.id !== e.id);
-        saveEntries();
-        entriesChanged(e.date);
-      });
-      li.appendChild(del);
-      list.appendChild(li);
-    }
+    for (const e of items) list.appendChild(entryItem(e));
   }
 
   $('calForm').addEventListener('submit', (ev) => {
@@ -673,6 +744,55 @@
   $('calPrev').addEventListener('click', () => { const d = new Date(calYear, calMonth - 1, 1); calYear = d.getFullYear(); calMonth = d.getMonth(); renderCalendar(); });
   $('calNext').addEventListener('click', () => { const d = new Date(calYear, calMonth + 1, 1); calYear = d.getFullYear(); calMonth = d.getMonth(); renderCalendar(); });
   $('calToday').addEventListener('click', () => gotoDate(Cal.todayKey()));
+
+  // ---------- 今天：添加、清除、分页 ----------
+  let addKind = 'todo';
+  const addDate = $('addDate');
+  addDate.value = Cal.todayKey();
+  $('addKind').addEventListener('click', () => {
+    addKind = addKind === 'todo' ? 'note' : 'todo';
+    $('addKind').dataset.v = addKind;
+    $('addKind').textContent = addKind === 'todo' ? '待办' : '提醒';
+    $('addInput').focus();
+  });
+  $('addForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const input = $('addInput');
+    const text = input.value.trim();
+    if (!text) return;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(addDate.value) ? addDate.value : Cal.todayKey();
+    entries.push({ id: Cal.uid(), date, kind: addKind, text, done: false, createdAt: Date.now() });
+    input.value = '';
+    addDate.value = Cal.todayKey();
+    saveEntries();
+    entriesChanged(date);
+    if (date !== Cal.todayKey()) {
+      const d = Cal.parseKey(date);
+      toast(`已添加到 ${d.getMonth() + 1}月${d.getDate()}日，到那天才会显示在桌面上`, '在日历里看', () => { openCal(); gotoDate(date); });
+    }
+    input.focus();
+  });
+  $('todayClear').addEventListener('click', () => {
+    const key = Cal.todayKey();
+    const gone = entries.filter((x) => x.date === key && x.kind === 'todo' && x.done);
+    if (!gone.length) return;
+    entries = entries.filter((x) => !gone.includes(x));
+    saveEntries();
+    entriesChanged(key);
+    toast(`已清除 ${gone.length} 条已完成的待办`, '撤销', () => { entries.push(...gone); saveEntries(); entriesChanged(key); });
+  });
+  for (const b of $('tabs').children) {
+    b.addEventListener('click', () => {
+      for (const x of $('tabs').children) {
+        x.classList.toggle('on', x === b);
+        x.setAttribute('aria-selected', String(x === b));
+      }
+      $('paneContent').hidden = b.dataset.t !== 'content';
+      $('paneStyle').hidden = b.dataset.t !== 'style';
+    });
+  }
+  window.addEventListener('focus', () => { renderToday(); if (document.activeElement !== addDate) addDate.value = addDate.value || Cal.todayKey(); });
+  renderToday();
 
   // ---------- 字体库 ----------
   const drawer = $('fontDrawer'), scrim = $('fontScrim'), grid = $('fontGrid');

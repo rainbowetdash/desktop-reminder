@@ -9,6 +9,32 @@
   let cfg = await api.getConfig();
   const Cal = window.Cal;
   let entries = await api.getEntries();
+
+  // 旧版的「常驻提醒」文字并入待办列表：每一行变成一条今天的待办（没做完的会一直顺延）
+  (function migrateLegacyText() {
+    const raw = cfg.text || '';
+    if (cfg.textMigrated) return;
+    if (raw.trim()) {
+      const today = Cal.todayKey();
+      let t = Date.now();
+      for (const line of raw.split('\n')) {
+        const s = line.trim();
+        if (!s) continue;
+        const pm = s.match(/^(?:[-*•·]|\d{1,3}[.、)）])\s*(.*)$/);
+        const rest = pm ? pm[1] : s;
+        const bm = rest.match(/^\[([ xX✓√✔]?)\]\s*(.*)$/);
+        const text = (bm ? bm[2] : rest).trim();
+        if (!text) continue;
+        const done = !!(bm && bm[1].trim());
+        entries.push({ id: Cal.uid(), date: today, kind: 'todo', text, done, doneOn: done ? today : '', createdAt: t++ });
+      }
+      api.saveEntries(entries);
+      cfg.legacyText = raw; // 留一份备份，万一要找回
+    }
+    cfg.text = '';
+    cfg.textMigrated = true;
+    api.saveConfig((({ platform, ...rest }) => rest)(cfg));
+  })();
   let screenSize = await api.screenSize();
   let installed = new Set(await api.fontsInstalled());
   const loadedFontCss = new Set();
@@ -42,7 +68,7 @@
     if (f.id !== 'system' && !installed.has(f.id)) f = fontById('system');
     if (f.id === 'system') return { family: null, bold: false };
     await ensureFontCss(f.id);
-    const text = (c.title || '') + (c.text || '') + R.dateString() + '0123456789•.';
+    const text = (c.title || '') + (c.text || '') + entries.map((e) => e.text).join('') + R.dateString() + '0123456789•.';
     const bold = !!(f.weights && f.weights.includes('700'));
     try {
       await document.fonts.load(`400 ${size}px "${f.family}"`, text);
@@ -70,7 +96,7 @@
       : bt === 'original' ? await loadImage(c.originalWallpaper)
       : bt === 'folder' ? await loadImage(c.lastPick) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
-    return R.renderWallpaper(canvas, c, W, H, { image, entries: Cal.entriesFor(entries, Cal.todayKey()), ...fo });
+    return R.renderWallpaper(canvas, c, W, H, { image, entries: Cal.visibleOn(entries, Cal.todayKey()), ...fo });
   }
 
   // ---------- 预览 ----------
@@ -100,7 +126,6 @@
     const res = await renderTo(off, cfg, Math.round(w * dpr), Math.round(h * dpr));
     if (seq !== renderSeq) return;
     lastHits = res.hits || [];
-    syncTodoInfo();
     preview.width = off.width;
     preview.height = off.height;
     preview.getContext('2d').drawImage(off, 0, 0);
@@ -118,7 +143,6 @@
     const h = hitAt(e);
     if (!h) return;
     if (h.entryId) toggleEntry(h.entryId);
-    else toggleTodo(h.line);
   });
 
   let autoTimer = null;
@@ -127,12 +151,6 @@
     if (!cfg.lastAppliedDate) return;
     clearTimeout(autoTimer);
     autoTimer = setTimeout(() => applyWallpaper(true), 900);
-  }
-
-  function setText(next) {
-    cfg.text = next;
-    textEl.value = next;
-    schedule();
   }
 
   function saveEntries() { return api.saveEntries(entries); }
@@ -155,11 +173,12 @@
     const e = entries.find((x) => x.id === id);
     if (!e) return;
     e.done = !e.done;
+    e.doneOn = e.done ? Cal.todayKey() : '';
     saveEntries();
     entriesChanged(e.date);
     if (quiet || !e.done) return;
-    const left = entries.filter((x) => x.date === e.date && x.kind === 'todo' && !x.done).length;
-    if (e.date === Cal.todayKey() && !left) toast('今天的待办全部完成了', '撤销', () => toggleEntry(id, true));
+    const left = Cal.visibleOn(entries, Cal.todayKey()).filter((x) => x.kind === 'todo' && !x.done).length;
+    if (!left) toast('今天的待办全部完成了', '撤销', () => toggleEntry(id, true));
     else toast(`已完成「${e.text.length > 16 ? e.text.slice(0, 16) + '…' : e.text}」`, '撤销', () => toggleEntry(id, true));
   }
 
@@ -207,7 +226,8 @@
         if (finished) return;
         finished = true;
         const v = input.value.trim();
-        if (save && v && v !== e.text) { e.text = v; saveEntries(); entriesChanged(e.date); }
+        const orig = entries.find((x) => x.id === e.id);
+        if (save && v && orig && v !== orig.text) { orig.text = v; saveEntries(); entriesChanged(orig.date); }
         else { input.replaceWith(txt); }
       };
       input.addEventListener('keydown', (ev) => {
@@ -218,6 +238,13 @@
       input.addEventListener('blur', () => finish(true));
     });
     li.appendChild(txt);
+    if (e.late > 0 && !e.done) {
+      const tag = document.createElement('span');
+      tag.className = 'late-tag';
+      tag.textContent = e.late === 1 ? '昨天的' : `逾期 ${e.late} 天`;
+      tag.title = `原定 ${Cal.parseKey(e.date).getMonth() + 1}月${Cal.parseKey(e.date).getDate()}日，没完成，自动顺延到今天`;
+      li.appendChild(tag);
+    }
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'del';
@@ -226,10 +253,11 @@
     del.textContent = '×';
     del.addEventListener('click', () => {
       const idx = entries.findIndex((x) => x.id === e.id);
-      entries.splice(idx, 1);
+      if (idx < 0) return;
+      const [orig] = entries.splice(idx, 1);
       saveEntries();
-      entriesChanged(e.date);
-      toast('已删除', '撤销', () => { entries.splice(Math.min(idx, entries.length), 0, e); saveEntries(); entriesChanged(e.date); });
+      entriesChanged(orig.date);
+      toast('已删除', '撤销', () => { entries.splice(Math.min(idx, entries.length), 0, orig); saveEntries(); entriesChanged(orig.date); });
     });
     li.appendChild(del);
     return li;
@@ -240,13 +268,13 @@
     const key = Cal.todayKey();
     const d = Cal.parseKey(key);
     $('todayDate').textContent = `${d.getMonth() + 1}月${d.getDate()}日 星期${Cal.weekdayName(d)}`;
-    const items = Cal.entriesFor(entries, key);
+    const items = Cal.visibleOn(entries, key);
     const list = $('todayList');
     list.innerHTML = '';
     if (!items.length) {
       const li = document.createElement('li');
       li.className = 'today-empty';
-      li.textContent = '今天还没有安排。在下面写一条，回车就能添加；想提前写以后的，改一下日期。';
+      li.textContent = '今天还没有安排。在上面写一条，回车就能添加；没做完的会自动顺延到明天。想提前写以后的，改一下日期。';
       list.appendChild(li);
     }
     for (const e of items) list.appendChild(entryItem(e));
@@ -254,16 +282,6 @@
     const done = todos.filter((x) => x.done).length;
     $('todayProgress').textContent = todos.length ? `已完成 ${done}/${todos.length}` : '';
     $('todayClear').hidden = !done;
-  }
-
-  function toggleTodo(line) {
-    const lines = (cfg.text || '').split('\n');
-    const re = /^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[([ xX✓√✔]?)\]/;
-    const m = lines[line] && lines[line].match(re);
-    if (!m) return;
-    lines[line] = lines[line].replace(re, (all, pre, mark) => `${pre}[${mark.trim() ? ' ' : 'x'}]`);
-    setText(lines.join('\n'));
-    autoApplySoon();
   }
 
   let timer = null;
@@ -282,106 +300,9 @@
   new ResizeObserver(() => refreshPreview()).observe(wrap);
 
   // ---------- 表单 ----------
-  const titleEl = $('title'), textEl = $('text');
+  const titleEl = $('title');
   titleEl.value = cfg.title || '';
-  textEl.value = cfg.text || '';
   titleEl.addEventListener('input', () => { cfg.title = titleEl.value; schedule(); });
-  textEl.addEventListener('input', (e) => {
-    if (!e.isComposing && /^(delete|insertFromPaste|insertFromDrop)/.test(e.inputType || '')) renumber();
-    cfg.text = textEl.value;
-    schedule();
-  });
-
-  // 编号列表：在中间插入、删除、粘贴后，同一段连续的编号自动重新排序
-  function renumber() {
-    const v = textEl.value, caret = textEl.selectionStart;
-    const lines = v.split('\n');
-    let start = 0, outLen = 0, newCaret = caret, run = null;
-    const out = lines.map((line) => {
-      const m = line.match(/^(\s*)(\d{1,3})([.、)）]\s*)(.*)$/);
-      let nl = line;
-      if (m) {
-        if (run && run.indent === m[1]) run.n++; else run = { indent: m[1], n: Number(m[2]) };
-        nl = m[1] + run.n + m[3] + m[4];
-      } else run = null;
-      if (caret >= start && caret <= start + line.length) {
-        const off = caret - start;
-        const prefix = m ? (m[1] + m[2] + m[3]).length : 0;
-        newCaret = outLen + off + (m && off >= prefix ? nl.length - line.length : 0);
-      }
-      start += line.length + 1;
-      outLen += nl.length + 1;
-      return nl;
-    });
-    const next = out.join('\n');
-    if (next !== v) {
-      textEl.value = next;
-      textEl.setSelectionRange(newCaret, newCaret);
-    }
-  }
-
-  // 回车时自动延续列表符号
-  textEl.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing || e.shiftKey) return;
-    const v = textEl.value, pos = textEl.selectionStart;
-    const lineStart = v.lastIndexOf('\n', pos - 1) + 1;
-    const line = v.slice(lineStart, pos);
-    let m = line.match(/^(\s*[-*•]\s+)(.*)$/);
-    let prefix = null;
-    const tm = line.match(/^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[[ xX✓√✔]?\]\s*(.*)$/);
-    if (tm) {
-      // 待办行：回车接着一个新的空待办；空待办再回车就结束
-      const lead = tm[1].match(/^(\s*)(\d{1,3})([.、)）]\s*)$/);
-      const next = lead ? lead[1] + (Number(lead[2]) + 1) + lead[3] : tm[1];
-      prefix = tm[2].trim() ? next + '[ ] ' : '';
-    } else if (m) prefix = m[2].trim() ? m[1] : '';
-    else if ((m = line.match(/^(\s*)(\d{1,3})([.、)）]\s*)(.*)$/))) prefix = m[4].trim() ? m[1] + (Number(m[2]) + 1) + m[3] : '';
-    if (prefix === null) return;
-    e.preventDefault();
-    if (prefix === '') {
-      // 空的列表项：回车清掉符号
-      textEl.setRangeText('', lineStart, pos, 'end');
-    } else {
-      textEl.setRangeText('\n' + prefix, pos, textEl.selectionEnd, 'end');
-    }
-    renumber();
-    textEl.dispatchEvent(new Event('input'));
-  });
-
-  // 待办工具
-  function selectedLineRange() {
-    const v = textEl.value;
-    const a = v.lastIndexOf('\n', textEl.selectionStart - 1) + 1;
-    let b = v.indexOf('\n', textEl.selectionEnd);
-    if (b < 0) b = v.length;
-    return [a, b];
-  }
-  $('addBox').addEventListener('click', () => {
-    const [a, b] = selectedLineRange();
-    const block = textEl.value.slice(a, b).split('\n');
-    const re = /^(\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?)\[[ xX✓√✔]?\]\s?/;
-    const all = block.every((l) => !l.trim() || re.test(l));
-    const out = block.map((l) => {
-      if (!l.trim()) return l;
-      if (all) return l.replace(re, '$1');
-      if (re.test(l)) return l;
-      const m = l.match(/^(\s*(?:[-*•·]|\d{1,3}[.、)）])\s*)(.*)$/);
-      return m ? m[1] + '[ ] ' + m[2] : l.replace(/^(\s*)/, '$1[ ] ');
-    }).join('\n');
-    textEl.focus();
-    textEl.setRangeText(out, a, b, 'select');
-    textEl.dispatchEvent(new Event('input'));
-  });
-  $('clearDone').addEventListener('click', () => {
-    const re = /^\s*(?:(?:[-*•·]|\d{1,3}[.、)）])\s*)?\[[xX✓√✔]\]/;
-    const kept = (cfg.text || '').split('\n').filter((l) => !re.test(l));
-    setText(kept.join('\n'));
-    textEl.dispatchEvent(new Event('input'));
-    autoApplySoon();
-  });
-  function syncTodoInfo() {
-    $('clearDone').hidden = !/\[[xX✓√✔]\]/.test(cfg.text || '');
-  }
 
   // 位置
   const posGrid = $('posGrid');
@@ -774,9 +695,10 @@
   });
   $('todayClear').addEventListener('click', () => {
     const key = Cal.todayKey();
-    const gone = entries.filter((x) => x.date === key && x.kind === 'todo' && x.done);
+    const ids = new Set(Cal.visibleOn(entries, key).filter((x) => x.kind === 'todo' && x.done).map((x) => x.id));
+    const gone = entries.filter((x) => ids.has(x.id));
     if (!gone.length) return;
-    entries = entries.filter((x) => !gone.includes(x));
+    entries = entries.filter((x) => !ids.has(x.id));
     saveEntries();
     entriesChanged(key);
     toast(`已清除 ${gone.length} 条已完成的待办`, '撤销', () => { entries.push(...gone); saveEntries(); entriesChanged(key); });

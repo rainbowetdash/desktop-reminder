@@ -36,7 +36,7 @@ function main() {
 
   const DEFAULTS = {
     title: '我的提醒',
-    text: '- 周五前交报告\n- 给妈妈打电话\n- 买牛奶\n\n记得多喝水 :)',
+    text: '', // 旧版的「常驻提醒」文字；现在全部并入待办列表，启动时自动迁移
     showDate: true,
     position: 'tr',
     fontSize: 32,
@@ -410,6 +410,7 @@ function main() {
         kind: e.kind === 'note' ? 'note' : 'todo',
         text: e.text.slice(0, 500),
         done: !!e.done,
+        doneOn: /^\d{4}-\d{2}-\d{2}$/.test(e.doneOn || '') ? e.doneOn : '',
         createdAt: Number(e.createdAt) || Date.now(),
       }));
     const tmp = P.entries + '.tmp';

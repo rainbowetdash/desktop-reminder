@@ -549,3 +549,8 @@ input[type="range"]::-webkit-slider-thumb {
 body.win .titlebar { padding-right: 168px; }
 body.win .drawer { padding-top: 60px; }
 body.win .cal { top: 58px; }
+
+/* 2.6.0：今天的列表占满，逾期标记 */
+.today { flex: 1; }
+.today-list { min-height: 160px; }
+.late-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 1px 7px; border-radius: 999px; }

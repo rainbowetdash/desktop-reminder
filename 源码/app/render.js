@@ -121,7 +121,7 @@
       if (lines.some((l) => l.kind !== 'gap')) lines.push({ kind: 'divider', body: '今日安排' });
       for (const e of extra) {
         lines.push(e.kind === 'todo'
-          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id }
+          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id, late: e.late || 0 }
           : { kind: 'bullet', marker: '•', body: e.text });
       }
     }
@@ -166,13 +166,15 @@
         continue;
       }
       const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : l.kind === 'todo' ? todoIndent : 0;
-      const parts = wrap(ctx, l.body, maxTextW - indent);
+      const tag = l.kind === 'todo' && l.late > 0 && !l.done ? (l.late === 1 ? "昨天的" : `逾期${l.late}天`) : '';
+      const parts = wrap(ctx, tag ? `${l.body}  ${tag}` : l.body, maxTextW - indent);
       parts.forEach((p, i) => {
         natural = Math.max(natural, indent + ctx.measureText(p).width);
         rows.push({
           font: F.body, text: p, x: indent, h: base * 1.48, role: 'body',
           marker: i === 0 && l.kind !== 'plain' && l.kind !== 'todo' ? l.marker : null,
           markerKind: l.kind,
+          tag,
           todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx, entryId: l.entryId } : null,
           gapBefore: first ? headGap : (i === 0 ? base * 0.28 : 0),
         });
@@ -284,9 +286,22 @@
       ctx.save();
       if (done) ctx.globalAlpha = 0.42;
       ctx.fillStyle = r.role === 'sub' ? sub : ink;
-      ctx.fillText(r.text, x + padX + r.x, baseline);
+      let mainText = r.text;
+      let tagText = '';
+      if (r.tag && r.text.endsWith(r.tag)) {
+        mainText = r.text.slice(0, r.text.length - r.tag.length).trimEnd();
+        tagText = r.tag;
+      }
+      ctx.fillText(mainText, x + padX + r.x, baseline);
+      if (tagText) {
+        const mw = ctx.measureText(mainText).width;
+        ctx.font = r.font.replace(/(\d+(?:\.\d+)?)px/, (m, n) => `${parseFloat(n) * 0.7}px`);
+        ctx.fillStyle = style === 'light' ? '#C2412D' : '#FF9F8A';
+        ctx.fillText(tagText, x + padX + r.x + mw + base * 0.4, baseline);
+        ctx.font = r.font;
+      }
       if (done && r.text) {
-        const tw = ctx.measureText(r.text).width;
+        const tw = ctx.measureText(mainText).width;
         ctx.shadowColor = 'transparent';
         ctx.strokeStyle = ink;
         ctx.lineWidth = Math.max(1, base * 0.05);

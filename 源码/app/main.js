@@ -1,7 +1,7 @@
 // 桌面提醒 — 主进程
 const {
   app, BrowserWindow, ipcMain, dialog, screen, Tray, Menu,
-  nativeImage, nativeTheme, net, powerMonitor,
+  nativeImage, nativeTheme, net, powerMonitor, shell,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -159,6 +159,33 @@ function main() {
     }
   });
 
+  // ---------- 检查更新（对比 GitHub 最新 Release） ----------
+  const RELEASES_URL = 'https://github.com/rainbowetdash/desktop-reminder/releases/latest';
+  function newerThan(a, b) {
+    const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+    for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); }
+    return false;
+  }
+  async function checkUpdate() {
+    try {
+      const res = await net.fetch('https://api.github.com/repos/rainbowetdash/desktop-reminder/releases/latest', { headers: { 'User-Agent': 'desktop-reminder' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const latest = String((await res.json()).tag_name || '').replace(/^v/, '');
+      if (!/^\d+\.\d+\.\d+$/.test(latest)) throw new Error('无法识别版本号');
+      return { ok: true, current: app.getVersion(), latest, hasNew: newerThan(latest, app.getVersion()) };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
+  async function checkUpdateDialog() {
+    const r = await checkUpdate();
+    if (!r.ok) { dialog.showMessageBox({ type: 'warning', message: '检查更新失败', detail: '请检查网络后再试。\n' + r.error }); return; }
+    if (!r.hasNew) { dialog.showMessageBox({ type: 'info', message: '已是最新版本', detail: '当前版本 ' + r.current }); return; }
+    const b = await dialog.showMessageBox({ type: 'info', message: '发现新版本 ' + r.latest, detail: '当前版本 ' + r.current, buttons: ['去下载', '以后再说'], defaultId: 0, cancelId: 1 });
+    if (b.response === 0) shell.openExternal(RELEASES_URL);
+  }
+  ipcMain.handle('update:check', () => checkUpdate());
+
   function createTray() {
     const file = isMac ? 'trayTemplate.png' : 'tray.png';
     const img = nativeImage.createFromPath(path.join(__dirname, 'assets', file));
@@ -170,6 +197,7 @@ function main() {
       { label: '立即更新壁纸', click: () => win && win.webContents.send('auto-apply', { force: true }) },
       { label: '换一张壁纸', click: () => rotateTick(true) },
       { label: '恢复原壁纸', click: () => { restoreOriginal().then((r) => { if (win) win.webContents.send('restored', r); }); } },
+      { label: '检查更新', click: checkUpdateDialog },
       { type: 'separator' },
       { label: '退出', click: () => { quitting = true; app.quit(); } },
     ]));

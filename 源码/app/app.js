@@ -274,7 +274,7 @@
     if (!items.length) {
       const li = document.createElement('li');
       li.className = 'today-empty';
-      li.textContent = '今天还没有安排。在上面写一条，回车就能添加；没做完的会自动顺延到明天。想提前写以后的，改一下日期。';
+      li.textContent = '今天还没有安排。在上面写一条，回车就能添加；没做完的会自动顺延到明天。想提前写以后的，点「日历」。';
       list.appendChild(li);
     }
     for (const e of items) list.appendChild(entryItem(e));
@@ -659,7 +659,7 @@
       for (const x of $('calKind').children) x.setAttribute('aria-checked', String(x === b));
     });
   }
-  $('calOpen').addEventListener('click', openCal);
+  $('calOpen').addEventListener('click', () => { gotoDate(Cal.todayKey()); openCal(); });
   $('calClose').addEventListener('click', closeCal);
   calScrim.addEventListener('click', closeCal);
   $('calPrev').addEventListener('click', () => { const d = new Date(calYear, calMonth - 1, 1); calYear = d.getFullYear(); calMonth = d.getMonth(); renderCalendar(); });
@@ -668,8 +668,6 @@
 
   // ---------- 今天：添加、清除、分页 ----------
   let addKind = 'todo';
-  const addDate = $('addDate');
-  addDate.value = Cal.todayKey();
   $('addKind').addEventListener('click', () => {
     addKind = addKind === 'todo' ? 'note' : 'todo';
     $('addKind').dataset.v = addKind;
@@ -681,16 +679,11 @@
     const input = $('addInput');
     const text = input.value.trim();
     if (!text) return;
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(addDate.value) ? addDate.value : Cal.todayKey();
+    const date = Cal.todayKey();
     entries.push({ id: Cal.uid(), date, kind: addKind, text, done: false, createdAt: Date.now() });
     input.value = '';
-    addDate.value = Cal.todayKey();
     saveEntries();
     entriesChanged(date);
-    if (date !== Cal.todayKey()) {
-      const d = Cal.parseKey(date);
-      toast(`已添加到 ${d.getMonth() + 1}月${d.getDate()}日，到那天才会显示在桌面上`, '在日历里看', () => { openCal(); gotoDate(date); });
-    }
     input.focus();
   });
   $('todayClear').addEventListener('click', () => {
@@ -713,7 +706,7 @@
       $('paneStyle').hidden = b.dataset.t !== 'style';
     });
   }
-  window.addEventListener('focus', () => { renderToday(); if (document.activeElement !== addDate) addDate.value = addDate.value || Cal.todayKey(); });
+  window.addEventListener('focus', () => { renderToday(); });
   renderToday();
 
   // ---------- 字体库 ----------

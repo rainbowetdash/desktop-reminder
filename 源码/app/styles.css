@@ -554,3 +554,13 @@ body.win .cal { top: 58px; }
 .today { flex: 1; }
 .today-list { min-height: 160px; }
 .late-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); padding: 1px 7px; border-radius: 999px; }
+
+/* 2.6.1：背景和轮换挪进「外观」；日历入口放在添加那一行 */
+.cal-chip { display: inline-flex; align-items: center; gap: 6px; }
+.cal-chip:hover { color: var(--accent); border-color: var(--accent); }
+#paneStyle .bg-bar { flex-direction: column; align-items: flex-start; gap: 8px; padding: 0; }
+#paneStyle .rotate-bar { padding: 0; }
+#paneStyle .swatches { gap: 8px; }
+#paneStyle .rotate-folder { max-width: 100%; }
+#paneStyle .rotate-bar { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+#paneStyle .rotate-bar[hidden] + .style-block, #paneStyle .style-block { padding-top: 4px; }

@@ -564,3 +564,7 @@ body.win .cal { top: 58px; }
 #paneStyle .rotate-folder { max-width: 100%; }
 #paneStyle .rotate-bar { border-bottom: 1px solid var(--line); padding-bottom: 14px; }
 #paneStyle .rotate-bar[hidden] + .style-block, #paneStyle .style-block { padding-top: 4px; }
+
+/* 2.7.1：标题栏小标志换成新图标（蓝色圆形对勾） */
+.brand-mark { width: 20px; height: 20px; border-radius: 0; background: none; position: static; }
+.brand-mark::after { display: none; }

@@ -146,11 +146,12 @@
   });
 
   let autoTimer = null;
+  let statusTimer = null;
   function autoApplySoon() {
     // 已经应用过壁纸的话，勾选后桌面也同步更新
     if (!cfg.lastAppliedDate) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => applyWallpaper(true), 900);
+    autoTimer = setTimeout(() => applyWallpaper(true), 300);
   }
 
   function saveEntries() { return api.saveEntries(entries); }
@@ -520,7 +521,11 @@
       const res = await api.applyWallpaper(bytes);
       if (res.ok) {
         const t = new Date();
-        setStatus(`已应用 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`, 'ok');
+        const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+        // 这个 App 这边只要 0.2 秒；之后是系统自己切换壁纸，有一两秒的过渡
+        setStatus(`已应用 ${hhmm}，系统正在切换壁纸…`, 'ok');
+        clearTimeout(statusTimer);
+        statusTimer = setTimeout(() => setStatus(`已应用 ${hhmm}`, 'ok'), 2500);
       } else {
         setStatus('没能换上壁纸：' + res.error, 'err');
       }

@@ -643,9 +643,12 @@ function main() {
       const file = path.join(P.walls, `wallpaper-${stamp}.png`);
       fs.writeFileSync(file, Buffer.from(bytes));
       await setWallpaper(file);
-      for (const f of fs.readdirSync(P.walls)) {
-        if (f !== path.basename(file)) fs.rmSync(path.join(P.walls, f), { force: true });
-      }
+      // 只清理更早的旧壁纸，保留上一张：系统切换壁纸有淡入淡出的过渡，过渡期间还要读旧图
+      const olds = fs.readdirSync(P.walls)
+        .filter((f) => f !== path.basename(file))
+        .map((f) => ({ f, t: fs.statSync(path.join(P.walls, f)).mtimeMs }))
+        .sort((x, y) => y.t - x.t);
+      for (const o of olds.slice(1)) fs.rmSync(path.join(P.walls, o.f), { force: true });
       const c = loadConfig();
       c.lastAppliedDate = today();
       saveConfig(c);

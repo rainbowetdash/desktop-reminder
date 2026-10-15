@@ -706,6 +706,10 @@ function main() {
     const startedAtLogin =
       process.argv.includes('--hidden') ||
       (isMac && os.uptime() < 240 && app.getLoginItemSettings().openAtLogin);
+    // macOS：直接指定 Dock 图标，不依赖系统的图标缓存（缓存有时会一直显示旧图标）
+    if (isMac && app.dock) {
+      try { app.dock.setIcon(nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'))); } catch {}
+    }
     createWindow(!startedAtLogin);
     createTray();
     setInterval(checkNewDay, 10 * 60 * 1000);

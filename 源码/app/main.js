@@ -439,6 +439,8 @@ function main() {
         text: e.text.slice(0, 500),
         done: !!e.done,
         doneOn: /^\d{4}-\d{2}-\d{2}$/.test(e.doneOn || '') ? e.doneOn : '',
+        important: !!e.important,
+        rank: Number.isFinite(e.rank) ? e.rank : null,
         createdAt: Number(e.createdAt) || Date.now(),
       }));
     const tmp = P.entries + '.tmp';

@@ -121,8 +121,8 @@
       if (lines.some((l) => l.kind !== 'gap')) lines.push({ kind: 'divider', body: '今日安排' });
       for (const e of extra) {
         lines.push(e.kind === 'todo'
-          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id, late: e.late || 0 }
-          : { kind: 'bullet', marker: '•', body: e.text });
+          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id, late: e.late || 0, important: !!e.important }
+          : { kind: 'bullet', marker: '•', body: e.text, important: !!e.important });
       }
     }
 
@@ -167,14 +167,23 @@
       }
       const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : l.kind === 'todo' ? todoIndent : 0;
       const tag = l.kind === 'todo' && l.late > 0 && !l.done ? (l.late === 1 ? "昨天的" : `逾期${l.late}天`) : '';
-      const parts = wrap(ctx, tag ? `${l.body}  ${tag}` : l.body, maxTextW - indent);
+      const star = !!l.important && !l.done;
+      const parts = wrap(ctx, l.body, maxTextW - indent);
+      // 逾期标记 / 重要星标接在最后一行文字后面；放不下就单独占一行，不拆开
+      const tagW = tag ? (ctx.font = F.date, ctx.measureText(tag).width * (0.7 / 0.68) + base * 0.4) : 0;
+      ctx.font = F.body;
+      const starW = star ? ctx.measureText('★').width + base * 0.35 : 0;
+      const lastW = ctx.measureText(parts[parts.length - 1]).width;
+      if ((tag || star) && lastW + tagW + starW > maxTextW - indent) parts.push('');
       parts.forEach((p, i) => {
-        natural = Math.max(natural, indent + ctx.measureText(p).width);
+        const last = i === parts.length - 1;
+        natural = Math.max(natural, indent + ctx.measureText(p).width + (last ? tagW + starW : 0));
         rows.push({
           font: F.body, text: p, x: indent, h: base * 1.48, role: 'body',
           marker: i === 0 && l.kind !== 'plain' && l.kind !== 'todo' ? l.marker : null,
           markerKind: l.kind,
-          tag,
+          tag: last ? tag : '',
+          star: last ? star : false,
           todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx, entryId: l.entryId } : null,
           gapBefore: first ? headGap : (i === 0 ? base * 0.28 : 0),
         });
@@ -286,19 +295,21 @@
       ctx.save();
       if (done) ctx.globalAlpha = 0.42;
       ctx.fillStyle = r.role === 'sub' ? sub : ink;
-      let mainText = r.text;
-      let tagText = '';
-      if (r.tag && r.text.endsWith(r.tag)) {
-        mainText = r.text.slice(0, r.text.length - r.tag.length).trimEnd();
-        tagText = r.tag;
-      }
+      const mainText = r.text;
       ctx.fillText(mainText, x + padX + r.x, baseline);
-      if (tagText) {
-        const mw = ctx.measureText(mainText).width;
+      let ox = x + padX + r.x + ctx.measureText(mainText).width;
+      if (r.tag) {
         ctx.font = r.font.replace(/(\d+(?:\.\d+)?)px/, (m, n) => `${parseFloat(n) * 0.7}px`);
         ctx.fillStyle = style === 'light' ? '#C2412D' : '#FF9F8A';
-        ctx.fillText(tagText, x + padX + r.x + mw + base * 0.4, baseline);
+        ox += mainText ? base * 0.4 : 0;
+        ctx.fillText(r.tag, ox, baseline);
+        ox += ctx.measureText(r.tag).width;
         ctx.font = r.font;
+      }
+      if (r.star) {
+        ctx.fillStyle = '#FFB020';
+        ctx.fillText('★', ox + (mainText || r.tag ? base * 0.35 : 0), baseline);
+        ctx.fillStyle = r.role === 'sub' ? sub : ink;
       }
       if (done && r.text) {
         const tw = ctx.measureText(mainText).width;

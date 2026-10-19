@@ -568,3 +568,26 @@ body.win .cal { top: 58px; }
 /* 2.7.1：标题栏小标志换成新图标（蓝色圆形对勾） */
 .brand-mark { width: 20px; height: 20px; border-radius: 0; background: none; position: static; }
 .brand-mark::after { display: none; }
+
+/* 2.8.0：待办做成可拖动的卡片 */
+.today-list { gap: 8px; padding: 2px 2px 6px; }
+.cal-list { gap: 8px; }
+.entry {
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 9px 8px 9px 4px; gap: 8px;
+  box-shadow: 0 1px 2px rgba(27, 30, 46, 0.04);
+  transition: box-shadow .15s, border-color .15s, opacity .15s, transform .15s, background .15s;
+}
+.entry:hover { background: var(--surface-2); border-color: var(--ink-3); box-shadow: 0 3px 10px rgba(27, 30, 46, 0.08); }
+.entry.dragging { opacity: .45; border-style: dashed; border-color: var(--accent); box-shadow: none; }
+.entry.important { border-left: 3px solid #F0A030; padding-left: 2px; }
+.entry.done { background: transparent; box-shadow: none; }
+.grip { flex: none; border: 0; background: none; color: var(--ink-3); cursor: grab; padding: 6px 4px; border-radius: 6px; line-height: 0; opacity: .5; transition: opacity .12s; }
+.entry:hover .grip, .grip:focus-visible { opacity: 1; }
+.grip:active { cursor: grabbing; }
+.star { flex: none; border: 0; background: none; color: var(--ink-3); padding: 2px 4px; border-radius: 6px; line-height: 0; opacity: 0; transition: opacity .12s, color .12s; }
+.entry:hover .star, .star:focus-visible, .star.on { opacity: 1; }
+.star.on { color: #F0A030; }
+.star:hover { color: #F0A030; }
+.today-hint { margin: -4px 0 2px; font-size: 12px; color: var(--ink-3); }
+.entry .txt { padding: 2px 0; }

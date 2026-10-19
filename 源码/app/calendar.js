@@ -21,11 +21,45 @@
     });
   }
 
-  // 某一天要显示的条目：待办在前、提醒在后，同类按添加顺序
+  // 排序规则：拖动排过先后的（有 rank）按 rank 从小到大，越靠前越重要；
+  // 没排过的（比如新加的）排在后面：标了重要的在前，待办在提醒前，越逾期越靠前，最后按添加顺序
+  function byOrder(a, b) {
+    const ra = Number.isFinite(a.rank) ? a.rank : Infinity;
+    const rb = Number.isFinite(b.rank) ? b.rank : Infinity;
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    if (!!a.important !== !!b.important) return a.important ? -1 : 1;
+    if (a.kind !== b.kind) return a.kind === 'todo' ? -1 : 1;
+    if (a.kind === 'todo' && (a.late || 0) !== (b.late || 0)) return (b.late || 0) - (a.late || 0);
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  }
+
+  // 把一组条目按给定的 id 顺序重新排列。
+  // 第一步：先给还没排过名次的条目都补上名次，顺序就是它们现在在屏幕上的先后，所以界面不会跳动；
+  // 第二步：这组条目原来占着哪些名次，就在它们之间重新分配，
+  //         这样和其他条目的相对先后不会乱（今天的列表、日历里某一天的列表都用这一个）。
+  // key 是「现在算哪一天」，默认今天。返回被改动的条数。
+  function assignRanks(list, orderedIds, key) {
+    list = list || [];
+    key = key || todayKey();
+    let n = 0;
+    const shown = visibleOn(list, key).map((e) => e.id);
+    const rest = list.filter((e) => !shown.includes(e.id))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.createdAt || 0) - (b.createdAt || 0)))
+      .map((e) => e.id);
+    let top = Math.max(0, ...list.map((e) => e.rank).filter(Number.isFinite));
+    for (const id of [...shown, ...rest]) {
+      const e = list.find((x) => x.id === id);
+      if (e && !Number.isFinite(e.rank)) { top += 1000; e.rank = top; n++; }
+    }
+    const items = orderedIds.map((id) => list.find((x) => x.id === id)).filter(Boolean);
+    const slots = items.map((e) => e.rank).sort((x, y) => x - y);
+    items.forEach((e, i) => { if (e.rank !== slots[i]) { e.rank = slots[i]; n++; } });
+    return n;
+  }
+
+  // 某一天要显示的条目
   function entriesFor(list, key) {
-    return (list || [])
-      .filter((e) => e.date === key)
-      .sort((a, b) => (a.kind === b.kind ? (a.createdAt || 0) - (b.createdAt || 0) : a.kind === 'todo' ? -1 : 1));
+    return (list || []).filter((e) => e.date === key).sort(byOrder);
   }
 
   function diffDays(fromKey, toKey) {
@@ -48,11 +82,7 @@
         else if (e.doneOn === key) out.push({ ...e, done: true, late });
       }
     }
-    return out.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === 'todo' ? -1 : 1;
-      if (a.kind === 'todo' && a.late !== b.late) return b.late - a.late; // 越久远的越靠前
-      return (a.createdAt || 0) - (b.createdAt || 0);
-    });
+    return out.sort(byOrder);
   }
 
   // 每个日期的概况，用来画日历上的小圆点
@@ -69,5 +99,5 @@
     return 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
-  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, diffDays, summarize, uid };
+  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, byOrder, assignRanks, diffDays, summarize, uid };
 })();

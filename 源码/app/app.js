@@ -193,7 +193,23 @@
   // 一条日历条目的一行：勾选框 + 文字（点一下可以改）+ 删除。今天的列表和日历里共用
   function entryItem(e) {
     const li = document.createElement('li');
-    li.className = 'entry' + (e.kind === 'todo' && e.done ? ' done' : '');
+    li.className = 'entry' + (e.kind === 'todo' && e.done ? ' done' : '') + (e.important ? ' important' : '');
+    li.dataset.id = e.id;
+    // 拖动手柄：按住它拖动整张卡片；聚焦后也可以用 ↑ ↓ 键移动
+    const grip = document.createElement('button');
+    grip.type = 'button';
+    grip.className = 'grip';
+    grip.title = '按住拖动，调整先后（越靠前越重要）；也可以用 ↑ ↓ 键';
+    grip.setAttribute('aria-label', '拖动排序：' + e.text);
+    grip.innerHTML = '<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></g></svg>';
+    grip.addEventListener('mousedown', () => { li.draggable = true; });
+    grip.addEventListener('mouseup', () => { li.draggable = false; });
+    grip.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown') return;
+      ev.preventDefault();
+      moveCard(li, ev.key === 'ArrowUp' ? -1 : 1);
+    });
+    li.appendChild(grip);
     if (e.kind === 'todo') {
       const cb = document.createElement('button');
       cb.type = 'button';
@@ -246,6 +262,21 @@
       tag.title = `原定 ${Cal.parseKey(e.date).getMonth() + 1}月${Cal.parseKey(e.date).getDate()}日，没完成，自动顺延到今天`;
       li.appendChild(tag);
     }
+    const star = document.createElement('button');
+    star.type = 'button';
+    star.className = 'star' + (e.important ? ' on' : '');
+    star.title = e.important ? '取消重要' : '标为重要';
+    star.setAttribute('aria-label', e.important ? '取消重要' : '标为重要');
+    star.setAttribute('aria-pressed', String(!!e.important));
+    star.innerHTML = '<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 2.6l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 7.9l5-.7z" fill="' + (e.important ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    star.addEventListener('click', () => {
+      const orig = entries.find((x) => x.id === e.id);
+      if (!orig) return;
+      orig.important = !orig.important;
+      saveEntries();
+      entriesChanged(orig.date);
+    });
+    li.appendChild(star);
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'del';
@@ -264,6 +295,60 @@
     return li;
   }
 
+  // ---------- 拖动排序 ----------
+  // 按列表里当前的先后顺序，给这些条目重新编号并保存
+  function commitOrder(list) {
+    const ids = [...list.querySelectorAll('.entry')].map((li) => li.dataset.id);
+    const first = entries.find((x) => x.id === ids[0]);
+    if (Cal.assignRanks(entries, ids)) saveEntries();
+    entriesChanged(first ? (list.id === 'todayList' ? Cal.todayKey() : first.date) : Cal.todayKey());
+  }
+
+  // 键盘：把卡片上移 / 下移一位
+  function moveCard(li, dir) {
+    const list = li.parentElement;
+    const sib = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
+    if (!sib || !sib.classList.contains('entry')) return;
+    if (dir < 0) list.insertBefore(li, sib); else list.insertBefore(sib, li);
+    const id = li.dataset.id;
+    commitOrder(list);
+    const g = document.querySelector(`.entry[data-id="${id}"] .grip`);
+    if (g) g.focus();
+  }
+
+  // 鼠标：拖动时卡片实时跟着移动，松手后保存
+  function enableSorting(list) {
+    let dragEl = null, dropped = false;
+    list.addEventListener('dragstart', (ev) => {
+      const li = ev.target.closest && ev.target.closest('.entry');
+      if (!li || !li.draggable) return;
+      dragEl = li; dropped = false;
+      li.classList.add('dragging');
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', li.dataset.id);
+    });
+    list.addEventListener('dragover', (ev) => {
+      if (!dragEl) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'move';
+      const after = [...list.querySelectorAll('.entry:not(.dragging)')].find((c) => {
+        const r = c.getBoundingClientRect();
+        return ev.clientY < r.top + r.height / 2;
+      });
+      if (after) { if (dragEl.nextElementSibling !== after) list.insertBefore(dragEl, after); }
+      else if (list.lastElementChild !== dragEl) list.appendChild(dragEl);
+    });
+    list.addEventListener('drop', (ev) => { if (dragEl) { ev.preventDefault(); dropped = true; } });
+    list.addEventListener('dragend', () => {
+      if (!dragEl) return;
+      const li = dragEl;
+      dragEl = null;
+      li.classList.remove('dragging');
+      li.draggable = false;
+      if (dropped) commitOrder(list); else { renderToday(); if (!$('cal').hidden) renderCalendar(); } // 取消了：还原
+    });
+  }
+
   // 主窗口里「今天」这一块
   function renderToday() {
     const key = Cal.todayKey();
@@ -279,6 +364,7 @@
       list.appendChild(li);
     }
     for (const e of items) list.appendChild(entryItem(e));
+    $('todayHint').hidden = items.length < 2;
     const todos = items.filter((x) => x.kind === 'todo');
     const done = todos.filter((x) => x.done).length;
     $('todayProgress').textContent = todos.length ? `已完成 ${done}/${todos.length}` : '';
@@ -712,6 +798,8 @@
     });
   }
   window.addEventListener('focus', () => { renderToday(); });
+  enableSorting($('todayList'));
+  enableSorting($('calList'));
   renderToday();
 
   // ---------- 字体库 ----------

@@ -802,6 +802,15 @@
   enableSorting($('calList'));
   renderToday();
 
+  // ---------- 版本号与检查更新 ----------
+  api.appVersion().then((v) => { $('appVersion').textContent = '版本 ' + v; });
+  $('checkUpdateBtn').addEventListener('click', async () => {
+    const b = $('checkUpdateBtn');
+    b.disabled = true;
+    b.textContent = '正在检查…';
+    try { await api.checkUpdateNow(); } finally { b.disabled = false; b.textContent = '检查更新'; }
+  });
+
   // ---------- 字体库 ----------
   const drawer = $('fontDrawer'), scrim = $('fontScrim'), grid = $('fontGrid');
   let filter = 'all';

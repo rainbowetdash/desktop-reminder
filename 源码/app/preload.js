@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('api', {
   defaultFolder: () => ipcRenderer.invoke('folder:default'),
   nextPick: (f) => ipcRenderer.invoke('folder:next', f),
   folderCount: (f) => ipcRenderer.invoke('folder:count', f),
+  checkUpdateNow: () => ipcRenderer.invoke('update:checkNow'),
+  appVersion: () => ipcRenderer.invoke('app:version'),
   getEntries: () => ipcRenderer.invoke('entries:get'),
   saveEntries: (list) => ipcRenderer.invoke('entries:save', list),
   setLogin: (on) => ipcRenderer.invoke('login:set', on),

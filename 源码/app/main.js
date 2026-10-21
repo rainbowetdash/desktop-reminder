@@ -169,6 +169,8 @@ function main() {
     onStateChange: (st) => { updateState = { ...updateState, ...st }; refreshTrayMenu(); },
   });
   let updateState = { downloading: null };
+  ipcMain.handle('update:checkNow', () => updater.checkNow());
+  ipcMain.handle('app:version', () => app.getVersion());
 
   function refreshTrayMenu() {
     if (!tray) return;
@@ -210,6 +212,7 @@ function main() {
         label: '桌面提醒',
         submenu: [
           { role: 'about', label: '关于桌面提醒' },
+          { label: '检查更新…', click: () => updater.checkNow() },
           { type: 'separator' },
           { role: 'hide', label: '隐藏' },
           { role: 'hideOthers', label: '隐藏其他' },
@@ -716,6 +719,13 @@ function main() {
     const upd = process.argv.find((x) => x.startsWith('--updated='));
     if (upd && win) win.webContents.once('did-finish-load', () => setTimeout(() => dialog.showMessageBox(win, { type: 'info', message: '已更新到 ' + app.getVersion(), detail: '更新完成，你的待办和设置都没有变化。' }), 1200));
     createTray();
+    // macOS：Dock 图标上右键也能找到「检查更新」
+    if (isMac && app.dock) {
+      app.dock.setMenu(Menu.buildFromTemplate([
+        { label: '打开桌面提醒', click: showWin },
+        { label: '检查更新…', click: () => updater.checkNow() },
+      ]));
+    }
     setInterval(checkNewDay, 10 * 60 * 1000);
     scheduleMidnight();
     updater.start();

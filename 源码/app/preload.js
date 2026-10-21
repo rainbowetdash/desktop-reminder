@@ -25,7 +25,6 @@ contextBridge.exposeInMainWorld('api', {
   downloadFont: (f) => ipcRenderer.invoke('fonts:download', f),
   removeFont: (id) => ipcRenderer.invoke('fonts:remove', id),
   previewCss: (f) => ipcRenderer.invoke('fonts:preview', f),
-  checkUpdate: () => ipcRenderer.invoke('update:check'),
   fileUrl: (p) => pathToFileURL(p).href,
   onFontProgress: (cb) => ipcRenderer.on('fonts:progress', (_e, d) => cb(d)),
   onAutoApply: (cb) => ipcRenderer.on('auto-apply', (_e, d) => cb(d)),

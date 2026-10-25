@@ -178,11 +178,21 @@ rm -rf "$STAGED"
   }
 
   // ---------- 流程：询问 → 下载 → 安装 ----------
+  // 是不是「正式装好的 App」：开发时用 electron . 运行的不能覆盖自己。
+  // 注意不能只看 app.isPackaged——我们的 macOS 安装包里程序文件就叫 Electron，Electron 会误以为是开发模式，
+  // 导致 isPackaged 一直是 false（2.10.0 的 bug：下载完只弹「开发模式不会覆盖安装」）。
+  function canSelfInstall() {
+    if (process.defaultApp) return false;
+    if (app.isPackaged) return true;
+    if (process.platform === 'darwin') return /\.app\/Contents\/MacOS\/[^/]+$/.test(process.execPath) && fs.existsSync(path.join(process.resourcesPath, 'app'));
+    return false;
+  }
+
   async function downloadAndInstall(info) {
     try {
       openProgress(info.latest);
       const file = await download(info.asset);
-      if (!app.isPackaged && !process.env.DR_UPDATE_FORCE_INSTALL) {
+      if (!canSelfInstall() && !process.env.DR_UPDATE_FORCE_INSTALL) {
         closeProgress();
         onStateChange({ downloading: null });
         await dialog.showMessageBox({ type: 'info', message: '下载完成（开发模式不会覆盖安装）', detail: file });

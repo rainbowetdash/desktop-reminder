@@ -47,7 +47,7 @@ function pickAsset(assets, version) {
 }
 
 module.exports = function setupUpdater(ctx) {
-  const { app, dialog, net, shell, getWin, loadConfig, saveConfig, requestQuit, onStateChange } = ctx;
+  const { app, dialog, net, shell, BrowserWindow, ipcMain, getWin, loadConfig, saveConfig, requestQuit, onStateChange } = ctx;
   const currentVersion = () => process.env.DR_FAKE_VERSION || app.getVersion();
 
   let busy = false;
@@ -62,18 +62,52 @@ module.exports = function setupUpdater(ctx) {
     return { latest, notes: String(j.body || '').trim(), asset: pickAsset(j.assets, latest) };
   }
 
+  // ---------- 更新进度窗口 ----------
+  let pwin = null;
+  let pstate = null;
+  let abortCtl = null;
+  function pushState(st) {
+    pstate = { ...(pstate || {}), ...st };
+    if (pwin && !pwin.isDestroyed() && pwin.webContents && !pwin.webContents.isLoading()) pwin.webContents.send('update:progress', pstate);
+    const dl = pstate.stage === 'download' && pstate.total ? pstate.got / pstate.total : null;
+    onStateChange({ downloading: pstate.stage === 'download' ? (dl === null ? 0 : dl) : null });
+    const w = getWin();
+    try { if (w) w.setProgressBar(dl === null ? -1 : dl); } catch {}
+  }
+  function openProgress(version) {
+    pstate = { stage: 'download', version, from: currentVersion(), got: 0, total: 0, speed: 0 };
+    if (pwin && !pwin.isDestroyed()) pwin.close();
+    pwin = new BrowserWindow({
+      width: 460, height: 290, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+      title: '更新桌面提醒', show: false, alwaysOnTop: true,
+      backgroundColor: '#EEF0F5',
+      webPreferences: { preload: path.join(__dirname, 'update-preload.js'), contextIsolation: true, sandbox: false },
+    });
+    pwin.setMenuBarVisibility(false);
+    pwin.loadFile(path.join(__dirname, 'update.html'));
+    pwin.once('ready-to-show', () => pwin && pwin.show());
+    pwin.webContents.on('did-finish-load', () => { if (pstate) pwin.webContents.send('update:progress', pstate); });
+    // 下载中关窗口 = 取消更新
+    pwin.on('close', () => { if (abortCtl && pstate && pstate.stage === 'download') abortCtl.abort(); });
+    pwin.on('closed', () => { pwin = null; });
+  }
+  function closeProgress() { if (pwin && !pwin.isDestroyed()) { pstate = null; pwin.destroy(); } pwin = null; }
+  if (ipcMain) ipcMain.on('update:cancel', () => { if (abortCtl) abortCtl.abort(); });
+
   // ---------- 下载 ----------
-  async function download(asset, onProgress) {
+  async function download(asset) {
     const dir = path.join(os.tmpdir(), 'desktop-reminder-update');
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     const dest = path.join(dir, asset.name);
-    const res = await net.fetch(asset.url, { headers: { 'User-Agent': 'desktop-reminder' } });
+    abortCtl = new AbortController();
+    const res = await net.fetch(asset.url, { headers: { 'User-Agent': 'desktop-reminder' }, signal: abortCtl.signal });
     if (!res.ok || !res.body) throw new Error('下载失败：HTTP ' + res.status);
     const total = Number(res.headers.get('content-length')) || asset.size || 0;
     const hash = crypto.createHash('sha256');
     const out = fs.createWriteStream(dest);
-    let got = 0;
+    let got = 0, lastT = Date.now(), lastGot = 0, speed = 0;
+    pushState({ stage: 'download', total, got: 0, speed: 0 });
     const reader = res.body.getReader();
     for (;;) {
       const { done, value } = await reader.read();
@@ -81,9 +115,17 @@ module.exports = function setupUpdater(ctx) {
       hash.update(value);
       got += value.length;
       if (!out.write(value)) await new Promise((r) => out.once('drain', r));
-      if (total) onProgress(got / total);
+      const now = Date.now();
+      if (now - lastT >= 400) { // 约每 0.4 秒刷新一次进度和速度
+        const inst = ((got - lastGot) / (now - lastT)) * 1000;
+        speed = speed ? speed * 0.6 + inst * 0.4 : inst;
+        lastT = now; lastGot = got;
+        pushState({ got, total, speed });
+      }
     }
+    abortCtl = null;
     await new Promise((r, j) => out.end((e) => (e ? j(e) : r())));
+    pushState({ stage: 'verify', got, total });
     if (asset.size && got !== asset.size) throw new Error(`下载不完整（${got} / ${asset.size} 字节）`);
     const sum = hash.digest('hex');
     if (asset.sha256 && sum !== asset.sha256) throw new Error('下载的文件校验不通过，已放弃安装');
@@ -136,31 +178,30 @@ rm -rf "$STAGED"
   }
 
   // ---------- 流程：询问 → 下载 → 安装 ----------
-  function setProgress(p) {
-    const w = getWin();
-    try { if (w) w.setProgressBar(p); } catch {}
-  }
-
   async function downloadAndInstall(info) {
     try {
-      onStateChange({ downloading: 0 });
-      const file = await download(info.asset, (p) => { setProgress(p); onStateChange({ downloading: p }); });
-      setProgress(-1);
-      onStateChange({ downloading: 1 });
+      openProgress(info.latest);
+      const file = await download(info.asset);
       if (!app.isPackaged && !process.env.DR_UPDATE_FORCE_INSTALL) {
+        closeProgress();
         onStateChange({ downloading: null });
         await dialog.showMessageBox({ type: 'info', message: '下载完成（开发模式不会覆盖安装）', detail: file });
         return;
       }
+      pushState({ stage: 'install' });
       if (process.platform === 'darwin') await installMac(file, info.latest);
       else if (process.platform === 'win32') installWin(file, info.latest);
       else throw new Error('这个系统暂不支持自动安装');
       pending = null;
-      requestQuit(); // 退出后由脚本接手：替换并重新打开
+      pushState({ stage: 'restart' });
+      setTimeout(() => requestQuit(), 1500); // 让用户看到「即将重启」；退出后由脚本接手：替换并重新打开
     } catch (e) {
-      setProgress(-1);
+      const cancelled = e && (e.name === 'AbortError' || /abort/i.test(e.message || ''));
+      abortCtl = null;
+      closeProgress();
       onStateChange({ downloading: null });
       try { fs.rmSync(path.join(os.tmpdir(), 'desktop-reminder-update'), { recursive: true, force: true }); } catch {} // 清掉没用的下载
+      if (cancelled) return;
       const b = await dialog.showMessageBox({ type: 'warning', message: '更新没有成功', detail: (e.message || String(e)) + '\n\n当前版本不受影响，可以继续使用。', buttons: ['打开下载页手动安装', '关闭'], defaultId: 1, cancelId: 1 });
       if (b.response === 0) shell.openExternal(RELEASES_URL);
     }

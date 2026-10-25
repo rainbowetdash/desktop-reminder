@@ -173,15 +173,25 @@
   function toggleEntry(id, quiet) {
     const e = entries.find((x) => x.id === id);
     if (!e) return;
-    e.done = !e.done;
-    e.doneOn = e.done ? Cal.todayKey() : '';
+    if (e.repeat) {
+      // 重复的待办：每一天单独算完成（今天做完，明天又是新的）
+      const today = Cal.todayKey();
+      e.doneOn = e.doneOn === today ? '' : today;
+      e.done = false;
+    } else {
+      e.done = !e.done;
+      e.doneOn = e.done ? Cal.todayKey() : '';
+    }
     saveEntries();
-    entriesChanged(e.date);
-    if (quiet || !e.done) return;
+    entriesChanged(dkey(e));
+    if (quiet || !(e.repeat ? e.doneOn : e.done)) return;
     const left = Cal.visibleOn(entries, Cal.todayKey()).filter((x) => x.kind === 'todo' && !x.done).length;
     if (!left) toast('今天的待办全部完成了', '撤销', () => toggleEntry(id, true));
     else toast(`已完成「${e.text.length > 16 ? e.text.slice(0, 16) + '…' : e.text}」`, '撤销', () => toggleEntry(id, true));
   }
+
+  // 重复条目每天都可能出现，改动它就等于改动今天
+  const dkey = (e) => (e.repeat ? Cal.todayKey() : e.date);
 
   function entriesChanged(dateKey) {
     renderToday();
@@ -244,7 +254,7 @@
         finished = true;
         const v = input.value.trim();
         const orig = entries.find((x) => x.id === e.id);
-        if (save && v && orig && v !== orig.text) { orig.text = v; saveEntries(); entriesChanged(orig.date); }
+        if (save && v && orig && v !== orig.text) { orig.text = v; saveEntries(); entriesChanged(dkey(orig)); }
         else { input.replaceWith(txt); }
       };
       input.addEventListener('keydown', (ev) => {
@@ -262,6 +272,13 @@
       tag.title = `原定 ${Cal.parseKey(e.date).getMonth() + 1}月${Cal.parseKey(e.date).getDate()}日，没完成，自动顺延到今天`;
       li.appendChild(tag);
     }
+    if (e.repeat) {
+      const rt = document.createElement('span');
+      rt.className = 'rep-tag';
+      rt.textContent = Cal.repeatLabel(e.repeat);
+      rt.title = '重复条目：到了对应的日子会自动出现，不会逾期。删除它，以后就都不再出现了';
+      li.appendChild(rt);
+    }
     const star = document.createElement('button');
     star.type = 'button';
     star.className = 'star' + (e.important ? ' on' : '');
@@ -274,7 +291,7 @@
       if (!orig) return;
       orig.important = !orig.important;
       saveEntries();
-      entriesChanged(orig.date);
+      entriesChanged(dkey(orig));
     });
     li.appendChild(star);
     const del = document.createElement('button');
@@ -288,8 +305,8 @@
       if (idx < 0) return;
       const [orig] = entries.splice(idx, 1);
       saveEntries();
-      entriesChanged(orig.date);
-      toast('已删除', '撤销', () => { entries.splice(Math.min(idx, entries.length), 0, orig); saveEntries(); entriesChanged(orig.date); });
+      entriesChanged(dkey(orig));
+      toast(orig.repeat ? '已删除这条重复提醒，以后也不再出现' : '已删除', '撤销', () => { entries.splice(Math.min(idx, entries.length), 0, orig); saveEntries(); entriesChanged(dkey(orig)); });
     });
     li.appendChild(del);
     return li;
@@ -360,7 +377,7 @@
     if (!items.length) {
       const li = document.createElement('li');
       li.className = 'today-empty';
-      li.textContent = '今天还没有安排。在上面写一条，回车就能添加；没做完的会自动顺延到明天。想提前写以后的，点「日历」。';
+      li.textContent = '今天还没有安排。在上面写一条，回车就能添加；没做完的会自动顺延到明天。想提前写以后的，点「日历」；每天都要看的，在「不重复」里选「每天」。';
       list.appendChild(li);
     }
     for (const e of items) list.appendChild(entryItem(e));
@@ -738,8 +755,10 @@
     const input = $('calInput');
     const text = input.value.trim();
     if (!text) return;
-    entries.push({ id: Cal.uid(), date: calSel, kind: calKind, text, done: false, createdAt: Date.now() });
+    const repeat = Cal.repeatFromChoice($('calRepeat').value, calSel);
+    entries.push({ id: Cal.uid(), date: calSel, kind: calKind, text, done: false, createdAt: Date.now(), ...(repeat ? { repeat } : {}) });
     input.value = '';
+    $('calRepeat').value = 'none';
     saveEntries();
     entriesChanged(calSel);
     input.focus();
@@ -771,8 +790,10 @@
     const text = input.value.trim();
     if (!text) return;
     const date = Cal.todayKey();
-    entries.push({ id: Cal.uid(), date, kind: addKind, text, done: false, createdAt: Date.now() });
+    const repeat = Cal.repeatFromChoice($('addRepeat').value, date);
+    entries.push({ id: Cal.uid(), date, kind: addKind, text, done: false, createdAt: Date.now(), ...(repeat ? { repeat } : {}) });
     input.value = '';
+    $('addRepeat').value = 'none';
     saveEntries();
     entriesChanged(date);
     input.focus();

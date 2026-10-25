@@ -161,7 +161,7 @@ function main() {
 
   // ---------- 自动更新（每隔一天检查；同意后下载并覆盖安装，见 updater.js） ----------
   const updater = require('./updater')({
-    app, dialog, net, shell,
+    app, dialog, net, shell, BrowserWindow, ipcMain,
     getWin: () => win,
     loadConfig,
     saveConfig: (patch) => saveConfig({ ...loadConfig(), ...patch }),
@@ -428,6 +428,16 @@ function main() {
       return [];
     }
   }
+  function cleanRepeat(r) {
+    if (!r || typeof r !== 'object') return null;
+    if (r.freq === 'daily' || r.freq === 'weekdays') return { freq: r.freq };
+    if (r.freq === 'weekly') {
+      const days = [...new Set((Array.isArray(r.days) ? r.days : []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))];
+      return days.length ? { freq: 'weekly', days } : null;
+    }
+    if (r.freq === 'monthly' && Number.isInteger(r.day) && r.day >= 1 && r.day <= 31) return { freq: 'monthly', day: r.day };
+    return null;
+  }
   function saveEntries(list) {
     const clean = (Array.isArray(list) ? list : [])
       .filter((e) => e && typeof e.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date) && typeof e.text === 'string')
@@ -439,6 +449,7 @@ function main() {
         done: !!e.done,
         doneOn: /^\d{4}-\d{2}-\d{2}$/.test(e.doneOn || '') ? e.doneOn : '',
         important: !!e.important,
+        repeat: cleanRepeat(e.repeat),
         rank: Number.isFinite(e.rank) ? e.rank : null,
         createdAt: Number(e.createdAt) || Date.now(),
       }));

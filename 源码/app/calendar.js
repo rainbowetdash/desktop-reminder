@@ -57,9 +57,49 @@
     return n;
   }
 
-  // 某一天要显示的条目
+  // ---------- 重复 ----------
+  // repeat = { freq: 'daily' | 'weekdays' | 'weekly' | 'monthly', days: [0..6]（周日=0）, day: 1..31 }
+  // 从条目的日期（起始日）开始，每逢符合规则的日子就出现；重复的待办每天单独算完成、不会逾期。
+  function occursOn(e, key) {
+    const r = e && e.repeat;
+    if (!r || key < e.date) return false;
+    const d = parseKey(key);
+    switch (r.freq) {
+      case 'daily': return true;
+      case 'weekdays': return d.getDay() >= 1 && d.getDay() <= 5;
+      case 'weekly': return (r.days || []).includes(d.getDay());
+      case 'monthly': {
+        const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+        return d.getDate() === Math.min(r.day || 1, last); // 31 号遇到小月，就落在月底
+      }
+      default: return false;
+    }
+  }
+  function repeatLabel(r) {
+    if (!r) return '';
+    if (r.freq === 'daily') return '每天';
+    if (r.freq === 'weekdays') return '工作日';
+    if (r.freq === 'weekly') return '每周' + (r.days || []).map((n) => '日一二三四五六'[n]).join('、');
+    if (r.freq === 'monthly') return `每月${r.day}号`;
+    return '';
+  }
+  // 从下拉框的值生成规则（start 是起始日期 key）
+  function repeatFromChoice(choice, start) {
+    if (choice === 'daily') return { freq: 'daily' };
+    if (choice === 'weekdays') return { freq: 'weekdays' };
+    if (/^w[0-6]$/.test(choice)) return { freq: 'weekly', days: [Number(choice[1])] };
+    if (choice === 'monthly') return { freq: 'monthly', day: parseKey(start).getDate() };
+    return null;
+  }
+
+  // 某一天要显示的条目（日期就是这一天的，加上这一天正好出现的重复条目）
   function entriesFor(list, key) {
-    return (list || []).filter((e) => e.date === key).sort(byOrder);
+    const out = [];
+    for (const e of list || []) {
+      if (e.repeat) { if (occursOn(e, key)) out.push({ ...e, done: e.kind === 'todo' && e.doneOn === key, recurring: true }); }
+      else if (e.date === key) out.push(e);
+    }
+    return out.sort(byOrder);
   }
 
   function diffDays(fromKey, toKey) {
@@ -75,6 +115,10 @@
   function visibleOn(list, key) {
     const out = [];
     for (const e of list || []) {
+      if (e.repeat) {
+        if (occursOn(e, key)) out.push({ ...e, late: 0, done: e.kind === 'todo' && e.doneOn === key, recurring: true });
+        continue;
+      }
       if (e.date === key) out.push({ ...e, late: 0 });
       else if (e.kind === 'todo' && e.date < key) {
         const late = diffDays(e.date, key);
@@ -89,6 +133,7 @@
   function summarize(list) {
     const out = {};
     for (const e of list || []) {
+      if (e.repeat) continue; // 重复的不算在日历圆点里（不然每天都有点）
       const s = out[e.date] || (out[e.date] = { todo: 0, done: 0, note: 0 });
       if (e.kind === 'todo') { s.todo++; if (e.done) s.done++; } else s.note++;
     }
@@ -99,5 +144,5 @@
     return 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
-  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, byOrder, assignRanks, diffDays, summarize, uid };
+  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, occursOn, repeatLabel, repeatFromChoice, byOrder, assignRanks, diffDays, summarize, uid };
 })();

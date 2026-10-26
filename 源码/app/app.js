@@ -96,7 +96,7 @@
       : bt === 'original' ? await loadImage(c.originalWallpaper)
       : bt === 'folder' ? await loadImage(c.lastPick) : null;
     const fo = await fontOpts(c, (c.fontSize || 32) * H / 1080);
-    return R.renderWallpaper(canvas, c, W, H, { image, entries: Cal.visibleOn(entries, Cal.todayKey()), ...fo });
+    return R.renderWallpaper(canvas, c, W, H, { image, entries: Cal.visibleOn(entries, Cal.todayKey()).map((e) => ({ ...e, tag: Cal.tagFor(e, Cal.todayKey()) })), ...fo });
   }
 
   // ---------- 预览 ----------
@@ -200,6 +200,32 @@
     if (dateKey === Cal.todayKey()) autoApplySoon(); // 改的是今天，桌面也同步
   }
 
+  // 修改 / 清除截止日：在卡片里换成一个日期框
+  function editDue(li, e) {
+    const orig = entries.find((x) => x.id === e.id);
+    if (!orig || li.querySelector('.due-edit')) return;
+    const input = document.createElement('input');
+    input.type = 'date';
+    input.className = 'due-edit';
+    input.value = orig.due || '';
+    input.min = orig.date;
+    input.title = '选截止日；清空表示不设截止日';
+    li.querySelectorAll('.due-tag, .due-btn').forEach((x) => x.remove());
+    li.insertBefore(input, li.querySelector('.star') || null);
+    input.focus();
+    try { input.showPicker(); } catch {}
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      if (save && input.value !== (orig.due || '')) { orig.due = input.value; saveEntries(); entriesChanged(dkey(orig)); }
+      else { renderToday(); if (!$('cal').hidden) renderCalendar(); }
+    };
+    input.addEventListener('change', () => finish(true));
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); finish(false); } });
+    input.addEventListener('blur', () => setTimeout(() => finish(false), 150));
+  }
+
   // 一条日历条目的一行：勾选框 + 文字（点一下可以改）+ 删除。今天的列表和日历里共用
   function entryItem(e) {
     const li = document.createElement('li');
@@ -265,12 +291,26 @@
       input.addEventListener('blur', () => finish(true));
     });
     li.appendChild(txt);
-    if (e.late > 0 && !e.done) {
-      const tag = document.createElement('span');
-      tag.className = 'late-tag';
-      tag.textContent = e.late === 1 ? '昨天的' : `逾期 ${e.late} 天`;
-      tag.title = `原定 ${Cal.parseKey(e.date).getMonth() + 1}月${Cal.parseKey(e.date).getDate()}日，没完成，自动顺延到今天`;
+    // 截止日标签：还有 N 天 / 明天 due / 今天 due / 已逾期 N 天；没设截止日但是顺延来的：昨天的 / N 天前的
+    const tg = Cal.tagFor(e, Cal.todayKey());
+    if (tg) {
+      const tag = document.createElement('button');
+      tag.type = 'button';
+      tag.className = 'due-tag due-' + tg.level;
+      tag.textContent = tg.text;
+      const md = (k) => `${Cal.parseKey(k).getMonth() + 1}月${Cal.parseKey(k).getDate()}日`;
+      tag.title = e.due ? `截止 ${md(e.due)}。点一下修改或清除` : `原定 ${md(e.date)}，没完成，自动顺延到今天。点一下设置截止日`;
+      tag.addEventListener('click', () => editDue(li, e));
       li.appendChild(tag);
+    } else if (e.kind === 'todo' && !e.repeat && !e.done) {
+      const db = document.createElement('button');
+      db.type = 'button';
+      db.className = 'due-btn';
+      db.title = '设置截止日（due）';
+      db.setAttribute('aria-label', '设置截止日');
+      db.innerHTML = '<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><rect x="3" y="4.5" width="14" height="12.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 8.5h14M7 3v3M13 3v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+      db.addEventListener('click', () => editDue(li, e));
+      li.appendChild(db);
     }
     if (e.repeat) {
       const rt = document.createElement('span');
@@ -706,6 +746,7 @@
       const parts = [];
       if (s) {
         if (s.todo) parts.push(`${s.todo}条待办${s.done === s.todo ? '，已全部完成' : ''}`);
+        if (s.due) parts.push(`${s.due}条待办在这天截止`);
         if (s.note) parts.push(`${s.note}条提醒`);
       }
       b.setAttribute('aria-label', `${Cal.parseKey(c.key).getMonth() + 1}月${c.day}日` + (parts.length ? '，' + parts.join('，') : '，没有安排'));
@@ -716,6 +757,7 @@
       if (s) {
         if (s.todo) { const d = document.createElement('i'); d.className = 'dot dot-todo' + (s.done === s.todo ? ' all-done' : ''); marks.appendChild(d); }
         if (s.note) { const d = document.createElement('i'); d.className = 'dot dot-note'; marks.appendChild(d); }
+        if (s.due) { const d = document.createElement('i'); d.className = 'dot dot-due'; d.title = `${s.due} 个待办在这天截止`; marks.appendChild(d); }
         if (s.todo + s.note > 1) { const n = document.createElement('span'); n.className = 'cal-count'; n.textContent = s.todo + s.note; marks.appendChild(n); }
       }
       b.append(num, marks);
@@ -729,6 +771,7 @@
   }
 
   function renderDay() {
+    if (typeof syncCalForm === 'function') syncCalForm();
     const d = Cal.parseKey(calSel);
     const t = $('calDayTitle');
     t.textContent = `${d.getMonth() + 1}月${d.getDate()}日 星期${Cal.weekdayName(d)}`;
@@ -756,17 +799,43 @@
     const text = input.value.trim();
     if (!text) return;
     const repeat = Cal.repeatFromChoice($('calRepeat').value, calSel);
-    entries.push({ id: Cal.uid(), date: calSel, kind: calKind, text, done: false, createdAt: Date.now(), ...(repeat ? { repeat } : {}) });
+    const dueV = $('calDue').value;
+    const due = calKind === 'todo' && !repeat && /^\d{4}-\d{2}-\d{2}$/.test(dueV) && dueV >= calSel ? dueV : '';
+    entries.push({ id: Cal.uid(), date: calSel, kind: calKind, text, done: false, createdAt: Date.now(), ...(repeat ? { repeat } : {}), ...(due ? { due } : {}) });
     input.value = '';
     $('calRepeat').value = 'none';
+    $('calDue').value = '';
+    syncCalForm();
     saveEntries();
     entriesChanged(calSel);
     input.focus();
   });
+  // 日历表单：截止日只对「待办」「不重复」有意义；提示里写清楚从哪天开始提醒
+  function syncCalForm() {
+    const repeating = $('calRepeat').value !== 'none';
+    const dueOk = calKind === 'todo' && !repeating;
+    const dueEl = $('calDue');
+    dueEl.disabled = !dueOk;
+    dueEl.min = calSel;
+    if (!dueOk) dueEl.value = '';
+    if (dueEl.value && dueEl.value < calSel) dueEl.value = '';
+    const d = Cal.parseKey(calSel);
+    const from = `${d.getMonth() + 1}月${d.getDate()}日`;
+    let hint = repeating ? `从 ${from} 开始，按所选的重复规则出现；重复的不设截止日` : calKind === 'note' ? `提醒只在 ${from} 当天显示，不会逾期` : `从 ${from} 开始提醒`;
+    if (dueOk && dueEl.value) {
+      const n = Cal.diffDays(Cal.todayKey(), dueEl.value);
+      const m = Cal.parseKey(dueEl.value);
+      hint += `，${m.getMonth() + 1}月${m.getDate()}日截止` + (n > 0 ? `（还有 ${n} 天）` : n === 0 ? '（就是今天）' : `（已过 ${-n} 天）`);
+    } else if (dueOk) hint += '；截止日可以不填';
+    $('calFormHint').textContent = hint;
+  }
+  $('calRepeat').addEventListener('change', syncCalForm);
+  $('calDue').addEventListener('change', syncCalForm);
   for (const b of $('calKind').children) {
     b.addEventListener('click', () => {
       calKind = b.dataset.v;
       for (const x of $('calKind').children) x.setAttribute('aria-checked', String(x === b));
+      syncCalForm();
     });
   }
   $('calOpen').addEventListener('click', () => { gotoDate(Cal.todayKey()); openCal(); });

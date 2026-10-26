@@ -449,6 +449,7 @@ function main() {
         done: !!e.done,
         doneOn: /^\d{4}-\d{2}-\d{2}$/.test(e.doneOn || '') ? e.doneOn : '',
         important: !!e.important,
+        due: /^\d{4}-\d{2}-\d{2}$/.test(e.due || '') ? e.due : '',
         repeat: cleanRepeat(e.repeat),
         rank: Number.isFinite(e.rank) ? e.rank : null,
         createdAt: Number(e.createdAt) || Date.now(),

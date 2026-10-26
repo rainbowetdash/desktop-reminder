@@ -121,7 +121,7 @@
       if (lines.some((l) => l.kind !== 'gap')) lines.push({ kind: 'divider', body: '今日安排' });
       for (const e of extra) {
         lines.push(e.kind === 'todo'
-          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id, late: e.late || 0, important: !!e.important }
+          ? { kind: 'todo', done: !!e.done, body: e.text, idx: -1, entryId: e.id, late: e.late || 0, tag: e.tag || null, important: !!e.important }
           : { kind: 'bullet', marker: '•', body: e.text, important: !!e.important });
       }
     }
@@ -166,7 +166,8 @@
         continue;
       }
       const indent = l.kind === 'bullet' ? bulletIndent : l.kind === 'num' ? numIndent : l.kind === 'todo' ? todoIndent : 0;
-      const tag = l.kind === 'todo' && l.late > 0 && !l.done ? (l.late === 1 ? "昨天的" : `逾期${l.late}天`) : '';
+      const tagObj = l.kind === 'todo' && !l.done ? l.tag : null; // {text, level}：由界面按截止日算好
+      const tag = tagObj ? tagObj.text : '';
       const star = !!l.important && !l.done;
       const parts = wrap(ctx, l.body, maxTextW - indent);
       // 逾期标记 / 重要星标接在最后一行文字后面；放不下就单独占一行，不拆开
@@ -183,6 +184,7 @@
           marker: i === 0 && l.kind !== 'plain' && l.kind !== 'todo' ? l.marker : null,
           markerKind: l.kind,
           tag: last ? tag : '',
+          tagLevel: last && tagObj ? tagObj.level : '',
           star: last ? star : false,
           todo: l.kind === 'todo' ? { done: l.done, first: i === 0, line: l.idx, entryId: l.entryId } : null,
           gapBefore: first ? headGap : (i === 0 ? base * 0.28 : 0),
@@ -300,7 +302,9 @@
       let ox = x + padX + r.x + ctx.measureText(mainText).width;
       if (r.tag) {
         ctx.font = r.font.replace(/(\d+(?:\.\d+)?)px/, (m, n) => `${parseFloat(n) * 0.7}px`);
-        ctx.fillStyle = style === 'light' ? '#C2412D' : '#FF9F8A';
+        const light = style === 'light';
+        const pal = { late: light ? '#C2412D' : '#FF9F8A', today: light ? '#C2412D' : '#FF9F8A', soon: light ? '#B7791F' : '#FFC247', ok: light ? '#5D6378' : 'rgba(255,255,255,0.62)', carry: light ? '#5D6378' : 'rgba(255,255,255,0.62)' };
+        ctx.fillStyle = pal[r.tagLevel] || pal.late;
         ox += mainText ? base * 0.4 : 0;
         ctx.fillText(r.tag, ox, baseline);
         ox += ctx.measureText(r.tag).width;

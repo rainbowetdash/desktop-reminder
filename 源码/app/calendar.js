@@ -29,7 +29,11 @@
     if (ra !== rb) return ra < rb ? -1 : 1;
     if (!!a.important !== !!b.important) return a.important ? -1 : 1;
     if (a.kind !== b.kind) return a.kind === 'todo' ? -1 : 1;
-    if (a.kind === 'todo' && (a.late || 0) !== (b.late || 0)) return (b.late || 0) - (a.late || 0);
+    if (a.kind === 'todo') {
+      const da = a.due || '9999-99-99', db = b.due || '9999-99-99';
+      if (da !== db) return da < db ? -1 : 1; // 截止日越近越靠前，没设的在后
+      if ((a.late || 0) !== (b.late || 0)) return (b.late || 0) - (a.late || 0);
+    }
     return (a.createdAt || 0) - (b.createdAt || 0);
   }
 
@@ -55,6 +59,23 @@
     const slots = items.map((e) => e.rank).sort((x, y) => x - y);
     items.forEach((e, i) => { if (e.rank !== slots[i]) { e.rank = slots[i]; n++; } });
     return n;
+  }
+
+  // ---------- 截止日（due）----------
+  // 待办可以设一个截止日 due：date 是「从哪天开始提醒」，due 是「最晚哪天要做完」。
+  // 标签放在卡片上：还有 N 天 / 明天 due / 今天 due / 已逾期 N 天；
+  // 没设截止日的、从以前顺延过来的，就写「昨天的 / N 天前的」。完成了不再显示标签。
+  function tagFor(e, key) {
+    if (!e || e.kind !== 'todo' || e.done) return null;
+    if (e.due) {
+      const n = diffDays(key, e.due);
+      if (n > 1) return { text: `还有 ${n} 天`, level: n <= 3 ? 'soon' : 'ok' };
+      if (n === 1) return { text: '明天 due', level: 'soon' };
+      if (n === 0) return { text: '今天 due', level: 'today' };
+      return { text: `已逾期 ${-n} 天`, level: 'late' };
+    }
+    if (e.late > 0) return { text: e.late === 1 ? '昨天的' : `${e.late} 天前的`, level: 'carry' };
+    return null;
   }
 
   // ---------- 重复 ----------
@@ -134,8 +155,12 @@
     const out = {};
     for (const e of list || []) {
       if (e.repeat) continue; // 重复的不算在日历圆点里（不然每天都有点）
-      const s = out[e.date] || (out[e.date] = { todo: 0, done: 0, note: 0 });
+      const s = out[e.date] || (out[e.date] = { todo: 0, done: 0, note: 0, due: 0 });
       if (e.kind === 'todo') { s.todo++; if (e.done) s.done++; } else s.note++;
+      if (e.kind === 'todo' && e.due && !e.done) { // 截止日那天的格子上标一个红点
+        const d = out[e.due] || (out[e.due] = { todo: 0, done: 0, note: 0, due: 0 });
+        d.due++;
+      }
     }
     return out;
   }
@@ -144,5 +169,5 @@
     return 'e_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
-  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, occursOn, repeatLabel, repeatFromChoice, byOrder, assignRanks, diffDays, summarize, uid };
+  window.Cal = { keyOf, todayKey, parseKey, weekdayName, monthGrid, entriesFor, visibleOn, tagFor, occursOn, repeatLabel, repeatFromChoice, byOrder, assignRanks, diffDays, summarize, uid };
 })();

@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
+const wallHeal = require('./wallpaper-heal');
 
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
@@ -243,6 +244,7 @@ function main() {
   }
 
   async function setWallpaper(file) {
+    if (process.env.DR_NO_SET_WALLPAPER) return; // 测试用：只生成文件，不真的改桌面
     if (isMac) {
       const script = `function run(argv){
         ObjC.import('AppKit');
@@ -559,7 +561,7 @@ function main() {
   ipcMain.handle('config:get', () => ({ ...loadConfig(), platform: process.platform }));
   ipcMain.handle('config:save', (_e, c) => {
     const cur = loadConfig();
-    const next = { ...cur, ...c, lastUpdateCheck: cur.lastUpdateCheck, skipVersion: cur.skipVersion, autoUpdate: cur.autoUpdate, originalWallpaper: cur.originalWallpaper, originalSource: cur.originalSource, originalFolder: cur.originalFolder, lastPick: cur.lastPick, lastPickSource: cur.lastPickSource, lastRotateAt: cur.lastRotateAt };
+    const next = { ...cur, ...c, wallSlot: cur.wallSlot, lastUpdateCheck: cur.lastUpdateCheck, skipVersion: cur.skipVersion, autoUpdate: cur.autoUpdate, originalWallpaper: cur.originalWallpaper, originalSource: cur.originalSource, originalFolder: cur.originalFolder, lastPick: cur.lastPick, lastPickSource: cur.lastPickSource, lastRotateAt: cur.lastRotateAt };
     delete next.platform;
     saveConfig(next);
     return true;
@@ -650,26 +652,45 @@ function main() {
   }
   ipcMain.handle('wallpaper:restore', () => restoreOriginal());
 
+  // 壁纸文件只用两个固定的名字轮流写（a / b），而且永远不删：
+  // macOS 会给每个桌面空间（Space）各记一个壁纸文件路径，我们删掉旧文件，那些空间就会变灰。
+  const WALL_SLOTS = ['wallpaper-a.png', 'wallpaper-b.png'];
   ipcMain.handle('wallpaper:apply', async (_e, bytes) => {
     try {
-      const stamp = Date.now();
-      const file = path.join(P.walls, `wallpaper-${stamp}.png`);
-      fs.writeFileSync(file, Buffer.from(bytes));
-      await setWallpaper(file);
-      // 只清理更早的旧壁纸，保留上一张：系统切换壁纸有淡入淡出的过渡，过渡期间还要读旧图
-      const olds = fs.readdirSync(P.walls)
-        .filter((f) => f !== path.basename(file))
-        .map((f) => ({ f, t: fs.statSync(path.join(P.walls, f)).mtimeMs }))
-        .sort((x, y) => y.t - x.t);
-      for (const o of olds.slice(1)) fs.rmSync(path.join(P.walls, o.f), { force: true });
       const c = loadConfig();
+      const slot = c.wallSlot === 0 ? 1 : 0; // 换一个名字，系统才会重新加载
+      const file = path.join(P.walls, WALL_SLOTS[slot]);
+      fs.writeFileSync(file + '.tmp', Buffer.from(bytes));
+      fs.renameSync(file + '.tmp', file); // 原子替换：任何时刻读到的都是完整的图
+      await setWallpaper(file);
+      c.wallSlot = slot;
       c.lastAppliedDate = today();
       saveConfig(c);
+      selfHealWallpapers(file);
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message || String(e) };
     }
   });
+
+  // 自愈：把系统还在引用的旧壁纸文件名补成指向最新壁纸的硬链接（不占空间），避免别的桌面空间变灰；
+  // 如果系统当前的壁纸指着我们目录里一个不存在的文件，就重新生成一张。
+  async function selfHealWallpapers(current) {
+    if (!isMac) return;
+    try {
+      let cur = current;
+      if (!cur) {
+        const files = fs.readdirSync(P.walls).filter((f) => /\.(png|jpe?g)$/i.test(f))
+          .map((f) => ({ f, t: fs.statSync(path.join(P.walls, f)).mtimeMs })).sort((x, y) => y.t - x.t);
+        if (files.length) cur = path.join(P.walls, files[0].f);
+      }
+      if (cur) await wallHeal.heal(P.walls, cur, WALL_SLOTS);
+      if (!current) {
+        const now = await currentWallpaperPath();
+        if (now && isOurs(now) && !fs.existsSync(now) && win) win.webContents.send('auto-apply', { force: true });
+      }
+    } catch { /* 修不成也不影响正常使用 */ }
+  }
 
   ipcMain.handle('login:set', (_e, on) => {
     try {
@@ -741,7 +762,8 @@ function main() {
     setInterval(checkNewDay, 10 * 60 * 1000);
     scheduleMidnight();
     updater.start();
-    powerMonitor.on('resume', () => { setTimeout(checkNewDay, 5000); updater.resumeCheck(); });
-    powerMonitor.on('unlock-screen', () => setTimeout(checkNewDay, 3000));
+    setTimeout(() => selfHealWallpapers(), 20000);
+    powerMonitor.on('resume', () => { setTimeout(checkNewDay, 5000); updater.resumeCheck(); setTimeout(() => selfHealWallpapers(), 8000); });
+    powerMonitor.on('unlock-screen', () => { setTimeout(checkNewDay, 3000); setTimeout(() => selfHealWallpapers(), 5000); });
   });
 }

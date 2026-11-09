@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   folderCount: (f) => ipcRenderer.invoke('folder:count', f),
   checkUpdateNow: () => ipcRenderer.invoke('update:checkNow'),
   appVersion: () => ipcRenderer.invoke('app:version'),
+  onWallpaperDone: (cb) => ipcRenderer.on('wallpaper:done', (_e, d) => cb(d)),
   getEntries: () => ipcRenderer.invoke('entries:get'),
   saveEntries: (list) => ipcRenderer.invoke('entries:save', list),
   setLogin: (on) => ipcRenderer.invoke('login:set', on),

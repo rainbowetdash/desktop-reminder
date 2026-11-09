@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
+const crypto = require('crypto');
 const wallHeal = require('./wallpaper-heal');
 
 const isMac = process.platform === 'darwin';
@@ -243,20 +244,56 @@ function main() {
     });
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let lastAgentRestart = 0;
+  // 比较两个路径是不是同一个文件（统一 Unicode 写法、解开符号链接，避免带中文/重音的用户名误判）
+  function samePath(a, b) {
+    const norm = (p) => { try { return fs.realpathSync(p).normalize('NFC'); } catch { return path.resolve(p).normalize('NFC'); } };
+    return !!a && !!b && norm(a) === norm(b);
+  }
+
+  // 调一次系统接口。注意：它即使被系统忽略也会返回成功，所以必须再验证（见 setWallpaperMac）
+  async function macSetOnce(file) {
+    const script = `function run(argv){
+      ObjC.import('AppKit');
+      var url = $.NSURL.fileURLWithPath(argv[0]);
+      var ws = $.NSWorkspace.sharedWorkspace;
+      var screens = $.NSScreen.screens, ok = true;
+      for (var i = 0; i < screens.count; i++) {
+        var r = ws.setDesktopImageURLForScreenOptionsError(url, screens.objectAtIndex(i), $({}), null);
+        ok = ok && r;
+      }
+      return ok ? 'ok' : 'fail';
+    }`;
+    return (await run('osascript', ['-l', 'JavaScript', '-e', script, file])).trim();
+  }
+  // 等系统真的接受：读回「系统当前壁纸」，看是不是我们刚设的这个文件
+  async function macAccepted(file) {
+    for (let i = 0; i < 4; i++) {
+      await sleep(i === 0 ? 1200 : 1500);
+      const cur = await currentWallpaperPath().catch(() => '');
+      if (samePath(cur, file)) return true;
+    }
+    return false;
+  }
+  const wlog = (m) => { if (process.env.DR_WALL_DEBUG) try { fs.appendFileSync('/tmp/wall-debug.log', new Date().toISOString().slice(11, 23) + ' ' + m + '\n'); } catch {} };
+  // 设置一次并读回验证：macOS 的壁纸服务（WallpaperAgent）有时会无声地忽略换壁纸的请求（接口照样返回成功），
+  // 尤其是刚换过壁纸之后的一小段时间里。返回系统是不是真的接受了。
+  async function macTryOnce(file) {
+    const r = await macSetOnce(file);
+    const ok = await macAccepted(file);
+    wlog(`set ${path.basename(file)} -> api=${r} accepted=${ok}`);
+    return ok;
+  }
+  async function setWallpaperMac(file) { // 其他场景（比如恢复原壁纸）：多试几次
+    for (let i = 0; i < 3; i++) { if (await macTryOnce(file)) return; await sleep(8000); }
+    throw new Error('系统没有接受这次换壁纸，请稍后再试');
+  }
+
   async function setWallpaper(file) {
     if (process.env.DR_NO_SET_WALLPAPER) return; // 测试用：只生成文件，不真的改桌面
     if (isMac) {
-      const script = `function run(argv){
-        ObjC.import('AppKit');
-        var url = $.NSURL.fileURLWithPath(argv[0]);
-        var ws = $.NSWorkspace.sharedWorkspace;
-        var screens = $.NSScreen.screens;
-        for (var i = 0; i < screens.count; i++) {
-          ws.setDesktopImageURLForScreenOptionsError(url, screens.objectAtIndex(i), $({}), null);
-        }
-        return 'ok';
-      }`;
-      await run('osascript', ['-l', 'JavaScript', '-e', script, file]);
+      await setWallpaperMac(file);
     } else if (isWin) {
       const p = file.replace(/'/g, "''");
       const ps = [
@@ -379,7 +416,7 @@ function main() {
     if (rotating || !win) return;
     const c = loadConfig();
     if (!c.background || c.background.type !== 'folder') return;
-    if (!force && !(c.rotateMinutes > 0 && Date.now() - (c.lastRotateAt || 0) >= c.rotateMinutes * 60000)) return;
+    if (!force && !(c.rotateMinutes > 0 && Date.now() - (c.lastRotateAt || 0) >= Math.max(5, c.rotateMinutes) * 60000)) return;
     rotating = true;
     try {
       const r = await nextPick(c.background.folder || c.rotateFolder);
@@ -655,23 +692,66 @@ function main() {
   // 壁纸文件只用两个固定的名字轮流写（a / b），而且永远不删：
   // macOS 会给每个桌面空间（Space）各记一个壁纸文件路径，我们删掉旧文件，那些空间就会变灰。
   const WALL_SLOTS = ['wallpaper-a.png', 'wallpaper-b.png'];
-  ipcMain.handle('wallpaper:apply', async (_e, bytes) => {
+  // 换壁纸的请求排队一个一个做（轮换、手动点、勾选待办可能同时来）
+  let applyChain = Promise.resolve();
+  let lastApplied = { hash: '', file: '' };
+  let applyToken = 0;      // 新请求会取代还在等待重试的旧请求
+  let pendingSlot = null;  // 正在等系统接受的那个文件槽位
+  ipcMain.handle('wallpaper:apply', (_e, bytes) => {
+    const job = applyChain.then(() => doApply(bytes));
+    applyChain = job.catch(() => {});
+    return job;
+  });
+  function notifyWall(r) { if (win && !win.isDestroyed()) win.webContents.send('wallpaper:done', r); }
+  function finalizeApply(slot, hash, file) {
+    const c = loadConfig();
+    c.wallSlot = slot;
+    c.lastAppliedDate = today();
+    saveConfig(c);
+    lastApplied = { hash, file };
+    pendingSlot = null;
+    selfHealWallpapers(file);
+  }
+  async function doApply(bytes) {
     try {
-      const c = loadConfig();
-      const slot = c.wallSlot === 0 ? 1 : 0; // 换一个名字，系统才会重新加载
+      const buf = Buffer.from(bytes);
+      const hash = crypto.createHash('sha1').update(buf).digest('hex');
+      // 画面和上次一模一样、系统现在显示的也正是那张：不用再换，避免没必要的频繁更换
+      if (isMac && hash === lastApplied.hash && lastApplied.file && pendingSlot === null) {
+        const cur = await currentWallpaperPath().catch(() => '');
+        if (samePath(cur, lastApplied.file)) { wlog('skip identical'); return { ok: true, skipped: true }; }
+      }
+      const token = ++applyToken;
+      const slot = pendingSlot !== null ? pendingSlot : (loadConfig().wallSlot === 0 ? 1 : 0); // 换一个名字，系统才会重新加载
       const file = path.join(P.walls, WALL_SLOTS[slot]);
-      fs.writeFileSync(file + '.tmp', Buffer.from(bytes));
+      fs.writeFileSync(file + '.tmp', buf);
       fs.renameSync(file + '.tmp', file); // 原子替换：任何时刻读到的都是完整的图
-      await setWallpaper(file);
-      c.wallSlot = slot;
-      c.lastAppliedDate = today();
-      saveConfig(c);
-      selfHealWallpapers(file);
-      return { ok: true };
+      if (!isMac) { await setWallpaper(file); finalizeApply(slot, hash, file); return { ok: true }; }
+      if (process.env.DR_NO_SET_WALLPAPER) { finalizeApply(slot, hash, file); return { ok: true }; }
+      if (await macTryOnce(file)) { finalizeApply(slot, hash, file); return { ok: true }; }
+      // 系统这会儿没接受（多半是刚换过壁纸，要隔一阵）：先告诉用户，然后在后台隔一会儿再试
+      pendingSlot = slot;
+      macBackoff(file, slot, hash, token);
+      return { ok: true, pending: true };
     } catch (e) {
       return { ok: false, error: e.message || String(e) };
     }
-  });
+  }
+  // 后台耐心等：系统处理壁纸有延迟，而且连续发请求会被合并或丢弃，所以先等它把上一次请求做完（最多 30 秒），
+  // 还没生效才再发一次，不要一直重复发。
+  async function macBackoff(file, slot, hash, token) {
+    for (let round = 0; round < 4; round++) {
+      for (let i = 0; i < 20; i++) {
+        await sleep(1500);
+        if (token !== applyToken) return; // 已经被更新的请求取代
+        const cur = await currentWallpaperPath().catch(() => '');
+        if (samePath(cur, file)) { wlog(`accepted after waiting (round ${round}, ${i})`); finalizeApply(slot, hash, file); notifyWall({ ok: true }); return; }
+      }
+      if (token !== applyToken) return;
+      try { await macSetOnce(file); wlog(`re-set round ${round + 1}`); } catch (e) { wlog('re-set error ' + e.message); }
+    }
+    if (token === applyToken) { pendingSlot = null; notifyWall({ ok: false, error: '系统一直没有接受这次换壁纸，请稍后再点一次「应用到桌面」' }); }
+  }
 
   // 自愈：把系统还在引用的旧壁纸文件名补成指向最新壁纸的硬链接（不占空间），避免别的桌面空间变灰；
   // 如果系统当前的壁纸指着我们目录里一个不存在的文件，就重新生成一张。

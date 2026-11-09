@@ -593,6 +593,8 @@
     const f = cfg.background.folder || cfg.rotateFolder || '';
     $('rotateFolder').textContent = f ? '\u200E' + f : '';
     $('rotateFolder').title = f;
+    // 太频繁地换壁纸，macOS 的壁纸服务会忽略请求甚至卡住，所以最短 5 分钟
+    if (cfg.rotateMinutes > 0 && cfg.rotateMinutes < 5) { cfg.rotateMinutes = 5; schedule(); }
     $('rotateMinutes').value = String(cfg.rotateMinutes ?? 30);
   }
   async function useFolder(folder) {
@@ -662,7 +664,10 @@
       const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const res = await api.applyWallpaper(bytes);
-      if (res.ok) {
+      if (res.ok && res.pending) {
+        clearTimeout(statusTimer);
+        setStatus('壁纸已交给系统。macOS 自己要约 30 秒才会真正换上，换好后这里会提示…');
+      } else if (res.ok) {
         const t = new Date();
         const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
         // 这个 App 这边只要 0.2 秒；之后是系统自己切换壁纸，有一两秒的过渡
@@ -699,6 +704,11 @@
     }
     if (e.key === 'Escape' && !$('fontDrawer').hidden) closeDrawer();
     else if (e.key === 'Escape' && !$('cal').hidden) closeCal();
+  });
+  api.onWallpaperDone((r) => {
+    const t = new Date();
+    const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+    if (r.ok) setStatus(`已应用 ${hhmm}`, 'ok'); else setStatus('没能换上壁纸：' + r.error, 'err');
   });
   api.onAutoApply(async () => {
     const fresh = await api.getConfig();
